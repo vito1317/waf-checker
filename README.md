@@ -13,8 +13,8 @@ A powerful web application to test how well your **Web Application Firewall (WAF
 </div>
 
 
+→ [waf-checker.com](https://waf-checker.com) ←
 
-> Live instance: [waf-checker.com](https://waf-checker.com)
 
 ![WAF Checker - Main Interface](./img/1-main.png)
 
