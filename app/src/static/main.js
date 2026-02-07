@@ -561,7 +561,7 @@ function renderResultRow(r, falsePositiveMode = false) {
 				<span class="px-2 py-0.5 bg-cyber-accent/10 text-cyber-accent text-xs font-mono rounded">${r.method}</span>
 			</td>
 			<td class="px-4 py-2.5 text-center">
-				<span class="px-2 py-0.5 ${statusBg} text-xs font-bold rounded cursor-help" ${statusTooltip}>${statusDisplay}</span>
+				<span class="px-2 py-0.5 ${statusBg} text-xs font-bold rounded cursor-pointer hover:brightness-125 transition-all" onclick="showHttpCodesModal()" ${statusTooltip}>${statusDisplay}</span>
 			</td>
 			<td class="px-4 py-2.5 text-center text-xs text-gray-500 whitespace-nowrap">${timeHtml}</td>
 			<td class="px-4 py-2.5">
@@ -1932,7 +1932,7 @@ function displayHTTPManipulationResults(data) {
 					<span class="px-2 py-0.5 bg-cyber-accent/10 text-cyber-accent text-xs font-mono rounded">${escapeHtml(methodDisplay)}</span>
 				</td>
 				<td class="px-4 py-2.5 text-center">
-					<span class="px-2 py-0.5 ${statusBg} text-xs font-bold rounded">${result.status}</span>
+					<span class="px-2 py-0.5 ${statusBg} text-xs font-bold rounded cursor-pointer hover:brightness-125 transition-all" onclick="showHttpCodesModal('httpManip')">${result.status}</span>
 				</td>
 				<td class="px-4 py-2.5 text-center">
 					<span class="px-2 py-1 ${resultBg} text-xs font-bold rounded">${resultText}</span>
