@@ -306,6 +306,12 @@ export default {
 		if (urlObj.pathname === '/api/recon') {
 			return await handleFullRecon(request);
 		}
+		if (urlObj.pathname === '/api/speedtest') {
+			return await handleSpeedTest(request);
+		}
+		if (urlObj.pathname === '/api/seo') {
+			return await handleSEOAudit(request);
+		}
 		return new Response('Not found', { status: 404 });
 	},
 };
@@ -3528,6 +3534,1326 @@ async function handleFullRecon(request: Request): Promise<Response> {
 	} catch (error) {
 		return new Response(
 			JSON.stringify({ error: 'Full reconnaissance failed', message: error instanceof Error ? error.message : 'Unknown error' }),
+			{ status: 500, headers: { 'content-type': 'application/json; charset=UTF-8' } },
+		);
+	}
+}
+
+// ================================================
+// SPEED TEST — Detailed site performance analysis
+// ================================================
+async function handleSpeedTest(request: Request): Promise<Response> {
+	const urlObj = new URL(request.url);
+	const targetUrl = urlObj.searchParams.get('url');
+
+	if (!targetUrl) {
+		return new Response(JSON.stringify({ error: 'Missing url parameter' }), {
+			status: 400, headers: { 'content-type': 'application/json; charset=UTF-8' },
+		});
+	}
+
+	let parsedTarget: URL;
+	try {
+		parsedTarget = new URL(targetUrl);
+		if (parsedTarget.protocol !== 'http:' && parsedTarget.protocol !== 'https:') throw new Error('Invalid protocol');
+	} catch {
+		return new Response(JSON.stringify({ error: 'Invalid URL' }), {
+			status: 400, headers: { 'content-type': 'application/json; charset=UTF-8' },
+		});
+	}
+
+	const hostname = parsedTarget.hostname;
+
+	try {
+		// ---- Phase 1: DNS resolution timing ----
+		const dnsStart = Date.now();
+		const aRecords = await resolveDNS(hostname, 'A');
+		const dnsTime = Date.now() - dnsStart;
+
+		// ---- Phase 2: Full page fetch with timing ----
+		const fetchStart = Date.now();
+		const controller = new AbortController();
+		const fetchTimeout = setTimeout(() => controller.abort(), 15000);
+		const mainResp = await fetch(targetUrl, {
+			signal: controller.signal,
+			headers: {
+				'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+				'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+				'Accept-Encoding': 'gzip, deflate, br',
+				'Accept-Language': 'en-US,en;q=0.9',
+			},
+			redirect: 'follow',
+		});
+		clearTimeout(fetchTimeout);
+		const ttfb = Date.now() - fetchStart;
+
+		const htmlBytes = await mainResp.arrayBuffer();
+		const totalTime = Date.now() - fetchStart;
+		const downloadTime = totalTime - ttfb;
+		const html = new TextDecoder().decode(htmlBytes);
+		const htmlSize = htmlBytes.byteLength;
+
+		const headers = Object.fromEntries([...mainResp.headers.entries()]);
+		const statusCode = mainResp.status;
+		const redirected = mainResp.redirected;
+		const finalUrl = mainResp.url;
+
+		// ---- Phase 3: Parse HTML for resources ----
+		const cssLinks: string[] = [];
+		const jsScripts: string[] = [];
+		const images: string[] = [];
+		const fonts: string[] = [];
+		const inlineCssSize = { count: 0, chars: 0 };
+		const inlineJsSize = { count: 0, chars: 0 };
+
+		// External CSS
+		const cssRegex = /<link[^>]+rel=["']stylesheet["'][^>]*href=["']([^"']+)["']/gi;
+		let m: RegExpExecArray | null;
+		while ((m = cssRegex.exec(html)) !== null) cssLinks.push(m[1]);
+
+		// External JS
+		const jsRegex = /<script[^>]+src=["']([^"']+)["'][^>]*>/gi;
+		while ((m = jsRegex.exec(html)) !== null) jsScripts.push(m[1]);
+
+		// Images
+		const imgRegex = /<img[^>]+src=["']([^"']+)["']/gi;
+		while ((m = imgRegex.exec(html)) !== null) images.push(m[1]);
+		// Background images in inline style
+		const bgRegex = /url\(["']?([^"')]+\.(?:jpg|jpeg|png|gif|webp|svg|avif))["']?\)/gi;
+		while ((m = bgRegex.exec(html)) !== null) images.push(m[1]);
+
+		// Fonts
+		const fontRegex = /url\(["']?([^"')]+\.(?:woff2?|ttf|otf|eot))["']?\)/gi;
+		while ((m = fontRegex.exec(html)) !== null) fonts.push(m[1]);
+		// Preloaded fonts
+		const fontPreloadRegex = /<link[^>]+rel=["']preload["'][^>]+as=["']font["'][^>]*href=["']([^"']+)["']/gi;
+		while ((m = fontPreloadRegex.exec(html)) !== null) fonts.push(m[1]);
+
+		// Inline CSS
+		const inlineCssRegex = /<style[^>]*>([\s\S]*?)<\/style>/gi;
+		while ((m = inlineCssRegex.exec(html)) !== null) {
+			inlineCssSize.count++;
+			inlineCssSize.chars += m[1].length;
+		}
+
+		// Inline JS
+		const inlineJsRegex = /<script(?![^>]+src=)[^>]*>([\s\S]*?)<\/script>/gi;
+		while ((m = inlineJsRegex.exec(html)) !== null) {
+			if (m[1].trim().length > 0) {
+				inlineJsSize.count++;
+				inlineJsSize.chars += m[1].length;
+			}
+		}
+
+		// ---- Phase 4: Fetch critical resources to measure sizes ----
+		interface ResourceInfo {
+			url: string;
+			size: number;
+			time: number;
+			type: string;
+			status: number;
+			compressed: boolean;
+		}
+		const resourceResults: ResourceInfo[] = [];
+
+		const resolveUrl = (href: string): string => {
+			try {
+				return new URL(href, finalUrl).toString();
+			} catch {
+				return href;
+			}
+		};
+
+		// Fetch a sample of resources (max 10 CSS + 10 JS + 5 images for speed)
+		const resourcesToFetch: { url: string; type: string }[] = [];
+		cssLinks.slice(0, 10).forEach(u => resourcesToFetch.push({ url: resolveUrl(u), type: 'css' }));
+		jsScripts.slice(0, 10).forEach(u => resourcesToFetch.push({ url: resolveUrl(u), type: 'js' }));
+		images.slice(0, 5).forEach(u => resourcesToFetch.push({ url: resolveUrl(u), type: 'image' }));
+		fonts.slice(0, 3).forEach(u => resourcesToFetch.push({ url: resolveUrl(u), type: 'font' }));
+
+		const fetchResource = async (r: { url: string; type: string }): Promise<ResourceInfo | null> => {
+			try {
+				const start = Date.now();
+				const resp = await fetchWithTimeout(r.url, {
+					headers: { 'Accept': '*/*', 'Accept-Encoding': 'gzip, deflate, br' },
+				}, 8000);
+				const buf = await resp.arrayBuffer();
+				return {
+					url: r.url,
+					size: buf.byteLength,
+					time: Date.now() - start,
+					type: r.type,
+					status: resp.status,
+					compressed: !!(resp.headers.get('content-encoding')),
+				};
+			} catch { return null; }
+		};
+
+		const resourcePromises = resourcesToFetch.map(fetchResource);
+		const resourceSettled = await Promise.allSettled(resourcePromises);
+		for (const r of resourceSettled) {
+			if (r.status === 'fulfilled' && r.value) resourceResults.push(r.value);
+		}
+
+		// ---- Phase 5: Analyze headers for performance indicators ----
+		const cacheControl = headers['cache-control'] || null;
+		const contentEncoding = headers['content-encoding'] || null;
+		const server = headers['server'] || null;
+		const xPoweredBy = headers['x-powered-by'] || null;
+		const contentType = headers['content-type'] || null;
+		const transferEncoding = headers['transfer-encoding'] || null;
+		const keepAlive = headers['keep-alive'] || headers['connection'] || null;
+		const vary = headers['vary'] || null;
+		const etag = headers['etag'] || null;
+		const lastModified = headers['last-modified'] || null;
+		const http2 = mainResp.headers.get('alt-svc')?.includes('h3') || mainResp.headers.get('alt-svc')?.includes('h2') || false;
+
+		// Detect preload/prefetch hints
+		const preloadHints: string[] = [];
+		const preloadRegex2 = /<link[^>]+rel=["'](preload|prefetch|preconnect|dns-prefetch|modulepreload)["'][^>]*>/gi;
+		while ((m = preloadRegex2.exec(html)) !== null) preloadHints.push(m[0]);
+
+		// Detect lazy loading
+		const lazyImages = (html.match(/loading=["']lazy["']/gi) || []).length;
+		const totalImages = images.length;
+
+		// Detect async/defer scripts
+		const asyncScripts = (html.match(/<script[^>]+async/gi) || []).length;
+		const deferScripts = (html.match(/<script[^>]+defer/gi) || []).length;
+		const totalExternalScripts = jsScripts.length;
+		const renderBlockingScripts = totalExternalScripts - asyncScripts - deferScripts;
+
+		// Detect critical CSS indicators
+		const hasCriticalCss = html.includes('rel="preload"') && html.includes('as="style"');
+
+		// Detect modern image formats
+		const modernImages = images.filter(i => /\.(webp|avif)/i.test(i)).length;
+
+		// ---- Phase 6: Calculate resource totals ----
+		const totalCssSize = resourceResults.filter(r => r.type === 'css').reduce((s, r) => s + r.size, 0);
+		const totalJsSize = resourceResults.filter(r => r.type === 'js').reduce((s, r) => s + r.size, 0);
+		const totalImgSize = resourceResults.filter(r => r.type === 'image').reduce((s, r) => s + r.size, 0);
+		const totalFontSize = resourceResults.filter(r => r.type === 'font').reduce((s, r) => s + r.size, 0);
+		const totalResourceSize = htmlSize + totalCssSize + totalJsSize + totalImgSize + totalFontSize;
+
+		const slowestResource = resourceResults.length > 0
+			? resourceResults.reduce((a, b) => a.time > b.time ? a : b)
+			: null;
+
+		// ---- Phase 7: Compute performance score (0-100) ----
+		let score = 100;
+		const penalties: { rule: string; points: number; detail: string }[] = [];
+
+		const penalize = (rule: string, points: number, detail: string) => {
+			score -= points;
+			penalties.push({ rule, points, detail });
+		};
+
+		// TTFB scoring (target < 200ms good, < 600ms ok, > 1000ms bad)
+		if (ttfb > 2000) penalize('Slow TTFB', 25, `TTFB is ${ttfb}ms (target: <200ms)`);
+		else if (ttfb > 1000) penalize('Slow TTFB', 15, `TTFB is ${ttfb}ms (target: <200ms)`);
+		else if (ttfb > 600) penalize('Moderate TTFB', 8, `TTFB is ${ttfb}ms (target: <200ms)`);
+		else if (ttfb > 200) penalize('TTFB could improve', 3, `TTFB is ${ttfb}ms (target: <200ms)`);
+
+		// DNS time
+		if (dnsTime > 200) penalize('Slow DNS', 5, `DNS resolution took ${dnsTime}ms`);
+
+		// Page size
+		if (htmlSize > 500000) penalize('Large HTML', 10, `HTML is ${(htmlSize / 1024).toFixed(0)}KB (target: <100KB)`);
+		else if (htmlSize > 200000) penalize('Large HTML', 5, `HTML is ${(htmlSize / 1024).toFixed(0)}KB (target: <100KB)`);
+		else if (htmlSize > 100000) penalize('HTML could be smaller', 2, `HTML is ${(htmlSize / 1024).toFixed(0)}KB`);
+
+		// Total resource size
+		if (totalResourceSize > 5000000) penalize('Very heavy page', 15, `Total ~${(totalResourceSize / 1024 / 1024).toFixed(1)}MB`);
+		else if (totalResourceSize > 3000000) penalize('Heavy page', 10, `Total ~${(totalResourceSize / 1024 / 1024).toFixed(1)}MB`);
+		else if (totalResourceSize > 1500000) penalize('Page weight', 5, `Total ~${(totalResourceSize / 1024 / 1024).toFixed(1)}MB`);
+
+		// Compression
+		if (!contentEncoding) penalize('No compression', 10, 'Response is not gzip/br compressed');
+
+		const uncompressedResources = resourceResults.filter(r => !r.compressed && r.size > 10000);
+		if (uncompressedResources.length > 3) penalize('Uncompressed resources', 5, `${uncompressedResources.length} resources >10KB not compressed`);
+
+		// Caching
+		if (!cacheControl) penalize('No cache headers', 5, 'Missing Cache-Control header');
+		else if (cacheControl.includes('no-store') || cacheControl.includes('no-cache')) penalize('Aggressive no-cache', 3, 'Cache-Control disables caching');
+
+		if (!etag && !lastModified) penalize('No validation headers', 3, 'Missing ETag and Last-Modified');
+
+		// Render-blocking resources
+		if (renderBlockingScripts > 5) penalize('Many render-blocking scripts', 10, `${renderBlockingScripts} scripts without async/defer`);
+		else if (renderBlockingScripts > 2) penalize('Render-blocking scripts', 5, `${renderBlockingScripts} scripts without async/defer`);
+
+		// CSS count
+		if (cssLinks.length > 10) penalize('Too many CSS files', 5, `${cssLinks.length} external stylesheets`);
+		else if (cssLinks.length > 5) penalize('Multiple CSS files', 2, `${cssLinks.length} external stylesheets`);
+
+		// JS count
+		if (jsScripts.length > 20) penalize('Too many JS files', 8, `${jsScripts.length} external scripts`);
+		else if (jsScripts.length > 10) penalize('Many JS files', 4, `${jsScripts.length} external scripts`);
+
+		// JS total size
+		if (totalJsSize > 1000000) penalize('Very large JS bundle', 10, `Total JS ~${(totalJsSize / 1024).toFixed(0)}KB`);
+		else if (totalJsSize > 500000) penalize('Large JS bundle', 5, `Total JS ~${(totalJsSize / 1024).toFixed(0)}KB`);
+
+		// Image optimization
+		if (totalImages > 0 && modernImages === 0) penalize('No modern image formats', 5, 'No WebP/AVIF images detected');
+		if (totalImages > 5 && lazyImages === 0) penalize('No lazy loading', 5, `${totalImages} images without lazy loading`);
+
+		// Inline resources
+		if (inlineJsSize.chars > 50000) penalize('Large inline JS', 5, `${(inlineJsSize.chars / 1024).toFixed(0)}KB of inline JavaScript`);
+		if (inlineCssSize.chars > 50000) penalize('Large inline CSS', 3, `${(inlineCssSize.chars / 1024).toFixed(0)}KB of inline CSS`);
+
+		// Redirect
+		if (redirected) penalize('Redirect detected', 2, `Redirected to ${finalUrl}`);
+
+		score = Math.max(0, Math.min(100, score));
+		const grade = score >= 90 ? 'A' : score >= 80 ? 'B' : score >= 70 ? 'C' : score >= 50 ? 'D' : 'F';
+
+		// ---- Phase 8: Generate advice ----
+		const advice: { priority: 'critical' | 'important' | 'suggestion'; title: string; description: string }[] = [];
+
+		if (ttfb > 600) advice.push({ priority: 'critical', title: 'Reduce Time to First Byte (TTFB)', description: `Your TTFB is ${ttfb}ms. Use a CDN, optimize server-side processing, enable HTTP/2, or upgrade your hosting. Target: <200ms.` });
+		if (!contentEncoding) advice.push({ priority: 'critical', title: 'Enable compression (gzip/Brotli)', description: 'Your HTML response is not compressed. Enable gzip or Brotli compression on your server to reduce transfer size by 60-80%.' });
+		if (renderBlockingScripts > 2) advice.push({ priority: 'critical', title: 'Eliminate render-blocking scripts', description: `${renderBlockingScripts} scripts block page rendering. Add "async" or "defer" attributes, or move scripts to the bottom of <body>.` });
+		if (totalJsSize > 500000) advice.push({ priority: 'critical', title: 'Reduce JavaScript bundle size', description: `Total JS is ${(totalJsSize / 1024).toFixed(0)}KB. Use code splitting, tree shaking, and remove unused dependencies. Target: <300KB.` });
+		if (totalResourceSize > 3000000) advice.push({ priority: 'critical', title: 'Reduce total page weight', description: `Page weighs ~${(totalResourceSize / 1024 / 1024).toFixed(1)}MB. Compress images, minify CSS/JS, and remove unused resources. Target: <1.5MB.` });
+		if (cssLinks.length > 5) advice.push({ priority: 'important', title: 'Consolidate CSS files', description: `${cssLinks.length} CSS files increase HTTP overhead. Bundle them into fewer files or use critical CSS inlining.` });
+		if (jsScripts.length > 10) advice.push({ priority: 'important', title: 'Consolidate JavaScript files', description: `${jsScripts.length} JS files. Bundle modules together or use HTTP/2 multiplexing.` });
+		if (!cacheControl || cacheControl.includes('no-store')) advice.push({ priority: 'important', title: 'Implement browser caching', description: 'Set Cache-Control headers with appropriate max-age for static resources (CSS, JS, images, fonts).' });
+		if (totalImages > 0 && modernImages === 0) advice.push({ priority: 'important', title: 'Use modern image formats', description: 'Convert images to WebP or AVIF format for 25-50% smaller file sizes while maintaining quality.' });
+		if (totalImages > 5 && lazyImages === 0) advice.push({ priority: 'important', title: 'Enable lazy loading for images', description: `Add loading="lazy" to below-the-fold images. ${totalImages} images detected without lazy loading.` });
+		if (uncompressedResources.length > 0) advice.push({ priority: 'important', title: 'Compress all resources', description: `${uncompressedResources.length} resources over 10KB are served without compression. Enable gzip/Brotli for all text-based assets.` });
+		if (fonts.length > 4) advice.push({ priority: 'suggestion', title: 'Reduce font files', description: `${fonts.length} font files detected. Limit to 2-3 font families and use font-display: swap.` });
+		if (inlineJsSize.chars > 30000) advice.push({ priority: 'suggestion', title: 'Externalize inline JavaScript', description: `${(inlineJsSize.chars / 1024).toFixed(0)}KB of inline JS. Extract to external files for better caching.` });
+		if (!hasCriticalCss && cssLinks.length > 2) advice.push({ priority: 'suggestion', title: 'Implement Critical CSS', description: 'Inline critical above-the-fold CSS and defer the rest to speed up first paint.' });
+		if (preloadHints.length === 0) advice.push({ priority: 'suggestion', title: 'Add resource hints', description: 'Use <link rel="preload">, <link rel="preconnect">, and <link rel="dns-prefetch"> for critical resources.' });
+		if (dnsTime > 100) advice.push({ priority: 'suggestion', title: 'Optimize DNS resolution', description: `DNS took ${dnsTime}ms. Use a fast DNS provider (Cloudflare, Google DNS) or add dns-prefetch hints.` });
+		if (!etag && !lastModified) advice.push({ priority: 'suggestion', title: 'Add validation headers', description: 'Add ETag or Last-Modified headers to allow conditional requests and save bandwidth.' });
+		if (redirected) advice.push({ priority: 'suggestion', title: 'Avoid redirects', description: `A redirect added latency. Point directly to the final URL: ${finalUrl}` });
+
+		// Sort advice by priority
+		const priorityOrder = { critical: 0, important: 1, suggestion: 2 };
+		advice.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
+
+		// ---- Phase 9: Estimated Web Vitals (computed locally, no external API) ----
+		// FCP ≈ TTFB + time for first render-blocking CSS
+		const cssResources = resourceResults.filter(r => r.type === 'css');
+		const firstCssTime = cssResources.length > 0 ? Math.min(...cssResources.map(r => r.time)) : 0;
+		const estimatedFCP = ttfb + firstCssTime + (renderBlockingScripts > 0 ? 100 : 0);
+
+		// LCP ≈ TTFB + largest resource load time (typically largest image or main content)
+		const imageResources = resourceResults.filter(r => r.type === 'image');
+		const largestImageTime = imageResources.length > 0 ? Math.max(...imageResources.map(r => r.time)) : 0;
+		const largestCssTime = cssResources.length > 0 ? Math.max(...cssResources.map(r => r.time)) : 0;
+		const estimatedLCP = ttfb + Math.max(largestImageTime, largestCssTime, firstCssTime + 200);
+
+		// TBT ≈ estimated from JS size + render-blocking scripts
+		const estimatedTBT = Math.round(
+			(totalJsSize / 1024) * 0.5 + // ~0.5ms per KB of JS to parse/execute
+			renderBlockingScripts * 50 + // ~50ms per render-blocking script
+			(inlineJsSize.chars / 1024) * 0.3 // inline JS overhead
+		);
+
+		// CLS ≈ heuristic based on images without dimensions, fonts, dynamic content
+		const imagesWithoutLazy = totalImages - lazyImages;
+		const estimatedCLS = Math.min(1,
+			(imagesWithoutLazy > 5 ? 0.15 : imagesWithoutLazy > 2 ? 0.08 : 0.02) +
+			(fonts.length > 3 ? 0.05 : 0) +
+			(inlineCssSize.count === 0 && cssLinks.length > 3 ? 0.05 : 0)
+		);
+
+		// Speed Index ≈ weighted combination of FCP and LCP
+		const estimatedSI = Math.round(estimatedFCP * 0.4 + estimatedLCP * 0.6);
+
+		// TTI ≈ LCP + TBT
+		const estimatedTTI = estimatedLCP + estimatedTBT;
+
+		// Score each vital (using Lighthouse thresholds)
+		const scoreVital = (value: number, good: number, poor: number): number => {
+			if (value <= good) return Math.min(1, 0.9 + 0.1 * (1 - value / good));
+			if (value <= poor) return 0.5 + 0.4 * (1 - (value - good) / (poor - good));
+			return Math.max(0, 0.5 * (1 - (value - poor) / poor));
+		};
+		const scoreCLS = (value: number): number => {
+			if (value <= 0.1) return 0.9 + 0.1 * (1 - value / 0.1);
+			if (value <= 0.25) return 0.5 + 0.4 * (1 - (value - 0.1) / 0.15);
+			return Math.max(0, 0.5 * (1 - (value - 0.25) / 0.25));
+		};
+
+		const webVitals = {
+			fcp: { numericValue: estimatedFCP, value: (estimatedFCP / 1000).toFixed(1) + ' s', score: scoreVital(estimatedFCP, 1800, 3000) },
+			lcp: { numericValue: estimatedLCP, value: (estimatedLCP / 1000).toFixed(1) + ' s', score: scoreVital(estimatedLCP, 2500, 4000) },
+			tbt: { numericValue: estimatedTBT, value: estimatedTBT + ' ms', score: scoreVital(estimatedTBT, 200, 600) },
+			cls: { numericValue: estimatedCLS, value: estimatedCLS.toFixed(2), score: scoreCLS(estimatedCLS) },
+			si: { numericValue: estimatedSI, value: (estimatedSI / 1000).toFixed(1) + ' s', score: scoreVital(estimatedSI, 3400, 5800) },
+			tti: { numericValue: estimatedTTI, value: (estimatedTTI / 1000).toFixed(1) + ' s', score: scoreVital(estimatedTTI, 3800, 7300) },
+		};
+
+		// Compute Lighthouse-like performance score (weighted like Lighthouse)
+		// Lighthouse weights: FCP 10%, SI 10%, LCP 25%, TBT 30%, CLS 25%
+		const lighthousePerf = Math.round(
+			webVitals.fcp.score * 10 +
+			webVitals.si.score * 10 +
+			webVitals.lcp.score * 25 +
+			webVitals.tbt.score * 30 +
+			webVitals.cls.score * 25
+		);
+
+		// Accessibility estimate (based on HTML analysis)
+		const accessibilityChecks: { pass: boolean; label: string }[] = [];
+		const hasLangAttr = /<html[^>]+lang=/i.test(html);
+		accessibilityChecks.push({ pass: hasLangAttr, label: 'HTML lang attribute' });
+		const hasViewport = /<meta[^>]+name=["']viewport["']/i.test(html);
+		accessibilityChecks.push({ pass: hasViewport, label: 'Viewport meta tag' });
+		const imgTags = html.match(/<img[^>]*>/gi) || [];
+		const imgWithAlt = imgTags.filter((t: string) => /alt=["'][^"']*["']/i.test(t)).length;
+		const altRatio = imgTags.length > 0 ? imgWithAlt / imgTags.length : 1;
+		accessibilityChecks.push({ pass: altRatio >= 0.8, label: `Image alt attributes (${imgWithAlt}/${imgTags.length})` });
+		const hasHeadings = /<h[1-6][^>]*>/i.test(html);
+		accessibilityChecks.push({ pass: hasHeadings, label: 'Heading structure' });
+		const hasSkipNav = /skip.*nav|skip.*content|skiplink/i.test(html);
+		accessibilityChecks.push({ pass: hasSkipNav, label: 'Skip navigation link' });
+		const ariaCount = (html.match(/aria-/gi) || []).length;
+		accessibilityChecks.push({ pass: ariaCount > 3, label: `ARIA attributes (${ariaCount} found)` });
+		const formLabels = (html.match(/<label/gi) || []).length;
+		const formInputs = (html.match(/<input(?![^>]+type=["'](?:hidden|submit|button)["'])/gi) || []).length;
+		accessibilityChecks.push({ pass: formInputs === 0 || formLabels >= formInputs * 0.7, label: `Form labels (${formLabels}/${formInputs})` });
+		const accessibilityScore = Math.round((accessibilityChecks.filter(c => c.pass).length / accessibilityChecks.length) * 100);
+
+		// Best Practices estimate
+		const bpChecks: { pass: boolean; label: string }[] = [];
+		bpChecks.push({ pass: parsedTarget.protocol === 'https:', label: 'HTTPS' });
+		bpChecks.push({ pass: !xPoweredBy, label: 'No X-Powered-By header' });
+		const hasDoctype = /^<!doctype html>/i.test(html.trim());
+		bpChecks.push({ pass: hasDoctype, label: 'HTML doctype' });
+		const hasCharset = /<meta[^>]+charset=/i.test(html);
+		bpChecks.push({ pass: hasCharset, label: 'Character encoding' });
+		bpChecks.push({ pass: !html.includes('http:') || html.includes('https:'), label: 'No mixed content' });
+		const bestPracticesScore = Math.round((bpChecks.filter(c => c.pass).length / bpChecks.length) * 100);
+
+		// SEO estimate
+		const seoChecks: { pass: boolean; label: string }[] = [];
+		const hasTitle = /<title[^>]*>[^<]+<\/title>/i.test(html);
+		seoChecks.push({ pass: hasTitle, label: 'Title tag' });
+		const hasMetaDesc = /<meta[^>]+name=["']description["'][^>]+content=["'][^"']+["']/i.test(html);
+		seoChecks.push({ pass: hasMetaDesc, label: 'Meta description' });
+		seoChecks.push({ pass: hasViewport, label: 'Viewport meta' });
+		const hasCanonical = /<link[^>]+rel=["']canonical["']/i.test(html);
+		seoChecks.push({ pass: hasCanonical, label: 'Canonical URL' });
+		const hasOG = /<meta[^>]+property=["']og:/i.test(html);
+		seoChecks.push({ pass: hasOG, label: 'Open Graph tags' });
+		const hasStructuredData = /application\/ld\+json/i.test(html);
+		seoChecks.push({ pass: hasStructuredData, label: 'Structured data (JSON-LD)' });
+		seoChecks.push({ pass: hasHeadings, label: 'Heading hierarchy' });
+		const hasRobots = /<meta[^>]+name=["']robots["']/i.test(html) || true; // default allow
+		seoChecks.push({ pass: hasRobots, label: 'Robots meta' });
+		const seoScore = Math.round((seoChecks.filter(c => c.pass).length / seoChecks.length) * 100);
+
+		const lighthouse = {
+			scores: {
+				performance: lighthousePerf,
+				accessibility: accessibilityScore,
+				'best-practices': bestPracticesScore,
+				seo: seoScore,
+			},
+			webVitals,
+			accessibilityChecks,
+			bestPracticesChecks: bpChecks,
+			seoChecks,
+		};
+
+		// ---- Build response ----
+		return new Response(
+			JSON.stringify({
+				url: targetUrl,
+				finalUrl,
+				hostname,
+				statusCode,
+				redirected,
+				// Timings
+				timing: {
+					dns: dnsTime,
+					ttfb,
+					download: downloadTime,
+					total: totalTime,
+				},
+				// Sizes
+				sizes: {
+					html: htmlSize,
+					css: totalCssSize,
+					js: totalJsSize,
+					images: totalImgSize,
+					fonts: totalFontSize,
+					total: totalResourceSize,
+				},
+				// Resource counts
+				counts: {
+					cssFiles: cssLinks.length,
+					jsFiles: jsScripts.length,
+					images: totalImages,
+					fonts: fonts.length,
+					inlineCss: inlineCssSize,
+					inlineJs: inlineJsSize,
+				},
+				// Performance indicators
+				performance: {
+					compressed: !!contentEncoding,
+					compressionType: contentEncoding,
+					cacheControl,
+					etag: !!etag,
+					lastModified: !!lastModified,
+					http2,
+					server,
+					asyncScripts,
+					deferScripts,
+					renderBlockingScripts,
+					lazyImages,
+					modernImages,
+					totalImages,
+					hasCriticalCss,
+					preloadHints: preloadHints.length,
+				},
+				// Individual resources
+				resources: resourceResults.map(r => ({
+					url: r.url.length > 120 ? r.url.substring(0, 117) + '...' : r.url,
+					size: r.size,
+					time: r.time,
+					type: r.type,
+					compressed: r.compressed,
+				})),
+				slowestResource: slowestResource ? {
+					url: slowestResource.url.length > 120 ? slowestResource.url.substring(0, 117) + '...' : slowestResource.url,
+					time: slowestResource.time,
+					size: slowestResource.size,
+					type: slowestResource.type,
+				} : null,
+				// Score & grade
+				score,
+				grade,
+				penalties,
+				// Advice
+				advice,
+				// Lighthouse-like metrics (computed locally)
+				lighthouse,
+				timestamp: new Date().toISOString(),
+			}),
+			{ headers: { 'content-type': 'application/json; charset=UTF-8' } },
+		);
+	} catch (error) {
+		return new Response(
+			JSON.stringify({ error: 'Speed test failed', message: error instanceof Error ? error.message : 'Unknown error' }),
+			{ status: 500, headers: { 'content-type': 'application/json; charset=UTF-8' } },
+		);
+	}
+}
+
+// ================================================
+// SEO AUDIT — Comprehensive SEO analysis
+// ================================================
+async function handleSEOAudit(request: Request): Promise<Response> {
+	const urlObj = new URL(request.url);
+	const targetUrl = urlObj.searchParams.get('url');
+
+	if (!targetUrl) {
+		return new Response(JSON.stringify({ error: 'Missing url parameter' }), {
+			status: 400, headers: { 'content-type': 'application/json; charset=UTF-8' },
+		});
+	}
+
+	let parsedTarget: URL;
+	try {
+		parsedTarget = new URL(targetUrl);
+		if (parsedTarget.protocol !== 'http:' && parsedTarget.protocol !== 'https:') throw new Error('Invalid protocol');
+	} catch {
+		return new Response(JSON.stringify({ error: 'Invalid URL' }), {
+			status: 400, headers: { 'content-type': 'application/json; charset=UTF-8' },
+		});
+	}
+
+	const hostname = parsedTarget.hostname;
+	const origin = parsedTarget.origin;
+
+	try {
+		// ---- Phase 1: Fetch main page ----
+		let mainResp!: Response;
+		let mainHtml = '';
+		let mainTime = 0;
+		let finalUrl = targetUrl;
+		const seoFetchHeaders: Record<string, string> = {
+			'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+			'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+			'Accept-Encoding': 'gzip, deflate, br',
+			'Accept-Language': 'en-US,en;q=0.9,fr;q=0.8',
+		};
+		const mainStart = Date.now();
+		// Use raw fetch with AbortController (same pattern as SpeedTest which works)
+		{
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), 15000);
+			try {
+				mainResp = await fetch(targetUrl, {
+					signal: controller.signal,
+					headers: seoFetchHeaders,
+					redirect: 'follow',
+				});
+				const ttfb = Date.now() - mainStart;
+				mainHtml = await mainResp.text();
+				mainTime = Date.now() - mainStart;
+				finalUrl = mainResp.url || targetUrl;
+			} catch (fetchErr) {
+				clearTimeout(timer);
+				const msg = fetchErr instanceof Error ? fetchErr.message : 'Unknown error';
+				return new Response(
+					JSON.stringify({ error: 'Cannot reach target site', message: `Failed to fetch ${hostname}: ${msg}` }),
+					{ status: 502, headers: { 'content-type': 'application/json; charset=UTF-8' } },
+				);
+			}
+			clearTimeout(timer);
+		}
+
+		// ---- Phase 2: Parallel fetches (robots.txt, sitemap.xml, multiple pages) ----
+		const [robotsResult, sitemapResult] = await Promise.allSettled([
+			fetchWithTimeout(`${origin}/robots.txt`, { headers: seoFetchHeaders }, 5000).then(async r => {
+				if (!r.ok) return null;
+				const txt = await r.text();
+				return txt.length < 50000 ? txt : txt.substring(0, 50000);
+			}).catch(() => null),
+			fetchWithTimeout(`${origin}/sitemap.xml`, { headers: seoFetchHeaders }, 5000).then(async r => {
+				if (!r.ok) return null;
+				const txt = await r.text();
+				return txt.length < 200000 ? txt : txt.substring(0, 200000);
+			}).catch(() => null),
+		]);
+
+		const robotsTxt = robotsResult.status === 'fulfilled' ? robotsResult.value : null;
+		const sitemapXml = sitemapResult.status === 'fulfilled' ? sitemapResult.value : null;
+
+		// ---- Phase 3: Parse main page ----
+
+		// Meta tags extraction
+		const getMetaContent = (name: string): string | null => {
+			const patterns = [
+				new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=["']([^"']*)["']`, 'i'),
+				new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]+name=["']${name}["']`, 'i'),
+			];
+			for (const p of patterns) {
+				const m = mainHtml.match(p);
+				if (m) return m[1];
+			}
+			return null;
+		};
+		const getMetaProperty = (prop: string): string | null => {
+			const patterns = [
+				new RegExp(`<meta[^>]+property=["']${prop}["'][^>]+content=["']([^"']*)["']`, 'i'),
+				new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]+property=["']${prop}["']`, 'i'),
+			];
+			for (const p of patterns) {
+				const m = mainHtml.match(p);
+				if (m) return m[1];
+			}
+			return null;
+		};
+
+		// Title
+		const titleMatch = mainHtml.match(/<title[^>]*>([^<]*)<\/title>/i);
+		const title = titleMatch ? titleMatch[1].trim() : null;
+
+		// Meta description
+		const metaDescription = getMetaContent('description');
+
+		// Viewport
+		const viewport = getMetaContent('viewport');
+
+		// Canonical
+		const canonicalMatch = mainHtml.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']*)["']/i)
+			|| mainHtml.match(/<link[^>]+href=["']([^"']*)["'][^>]+rel=["']canonical["']/i);
+		const canonical = canonicalMatch ? canonicalMatch[1] : null;
+
+		// Robots meta
+		const robotsMeta = getMetaContent('robots');
+
+		// Open Graph
+		const ogTitle = getMetaProperty('og:title');
+		const ogDescription = getMetaProperty('og:description');
+		const ogImage = getMetaProperty('og:image');
+		const ogUrl = getMetaProperty('og:url');
+		const ogType = getMetaProperty('og:type');
+		const ogSiteName = getMetaProperty('og:site_name');
+
+		// Twitter Card
+		const twitterCard = getMetaContent('twitter:card');
+		const twitterTitle = getMetaContent('twitter:title');
+		const twitterDescription = getMetaContent('twitter:description');
+		const twitterImage = getMetaContent('twitter:image');
+
+		// Charset
+		const charsetMatch = mainHtml.match(/<meta[^>]+charset=["']?([^"'\s>]+)/i);
+		const charset = charsetMatch ? charsetMatch[1].toUpperCase() : null;
+
+		// Language
+		const langMatch = mainHtml.match(/<html[^>]+lang=["']([^"']*)["']/i);
+		const lang = langMatch ? langMatch[1] : null;
+
+		// Hreflang tags
+		const hreflangMatches = [...mainHtml.matchAll(/<link[^>]+hreflang=["']([^"']*)["'][^>]+href=["']([^"']*)["']/gi)];
+		const hreflangs = hreflangMatches.map(m => ({ lang: m[1], url: m[2] }));
+		// Also check reverse order
+		const hreflangMatches2 = [...mainHtml.matchAll(/<link[^>]+href=["']([^"']*)["'][^>]+hreflang=["']([^"']*)["']/gi)];
+		for (const m of hreflangMatches2) {
+			if (!hreflangs.some(h => h.lang === m[2])) {
+				hreflangs.push({ lang: m[2], url: m[1] });
+			}
+		}
+
+		// Headings analysis
+		const headings: { tag: string; text: string }[] = [];
+		const headingRegex = /<(h[1-6])[^>]*>([\s\S]*?)<\/\1>/gi;
+		let headingMatch;
+		while ((headingMatch = headingRegex.exec(mainHtml)) !== null && headings.length < 100) {
+			const text = headingMatch[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+			if (text) headings.push({ tag: headingMatch[1].toUpperCase(), text: text.substring(0, 200) });
+		}
+
+		// Images analysis
+		const imgRegex = /<img[^>]*>/gi;
+		const images: { src: string; alt: string | null; hasAlt: boolean; lazy: boolean; width: boolean; height: boolean }[] = [];
+		let imgMatch;
+		while ((imgMatch = imgRegex.exec(mainHtml)) !== null && images.length < 200) {
+			const tag = imgMatch[0];
+			const srcM = tag.match(/src=["']([^"']*)["']/i);
+			const altM = tag.match(/alt=["']([^"']*)["']/i);
+			const hasAlt = /alt=/i.test(tag);
+			const lazy = /loading=["']lazy["']/i.test(tag);
+			const hasWidth = /width=/i.test(tag);
+			const hasHeight = /height=/i.test(tag);
+			images.push({
+				src: srcM ? srcM[1].substring(0, 200) : '',
+				alt: altM ? altM[1] : null,
+				hasAlt,
+				lazy,
+				width: hasWidth,
+				height: hasHeight,
+			});
+		}
+
+		// Internal and external links
+		const linkRegex = /<a[^>]+href=["']([^"'#]*?)["'][^>]*>([\s\S]*?)<\/a>/gi;
+		const internalLinks: { url: string; text: string; nofollow: boolean }[] = [];
+		const externalLinks: { url: string; text: string; nofollow: boolean; hasTarget: boolean }[] = [];
+		let linkMatch;
+		while ((linkMatch = linkRegex.exec(mainHtml)) !== null && (internalLinks.length + externalLinks.length) < 500) {
+			const href = linkMatch[1].trim();
+			if (!href || href.startsWith('javascript:') || href.startsWith('mailto:') || href.startsWith('tel:')) continue;
+			const text = linkMatch[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+			const tagStr = linkMatch[0];
+			const nofollow = /rel=["'][^"']*nofollow[^"']*["']/i.test(tagStr);
+			const hasTarget = /target=["']_blank["']/i.test(tagStr);
+
+			try {
+				const resolved = new URL(href, finalUrl);
+				if (resolved.hostname === hostname || resolved.hostname === `www.${hostname}` || hostname === `www.${resolved.hostname}`) {
+					if (internalLinks.length < 200) {
+						internalLinks.push({ url: resolved.pathname + resolved.search, text: text.substring(0, 100), nofollow });
+					}
+				} else {
+					if (externalLinks.length < 100) {
+						externalLinks.push({ url: resolved.href.substring(0, 200), text: text.substring(0, 100), nofollow, hasTarget });
+					}
+				}
+			} catch { /* invalid URL */ }
+		}
+
+		// Structured data (JSON-LD)
+		const jsonLdRegex = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+		const structuredData: any[] = [];
+		let jsonLdMatch;
+		while ((jsonLdMatch = jsonLdRegex.exec(mainHtml)) !== null && structuredData.length < 20) {
+			try {
+				const parsed = JSON.parse(jsonLdMatch[1].trim());
+				structuredData.push({
+					type: parsed['@type'] || (Array.isArray(parsed['@graph']) ? 'Graph' : 'Unknown'),
+					summary: JSON.stringify(parsed).substring(0, 300),
+				});
+			} catch {
+				structuredData.push({ type: 'Invalid JSON-LD', summary: jsonLdMatch[1].substring(0, 200) });
+			}
+		}
+
+		// Check for social media links
+		const socialPatterns: { name: string; pattern: RegExp }[] = [
+			{ name: 'Facebook', pattern: /facebook\.com\/[a-zA-Z0-9._-]+/i },
+			{ name: 'Twitter/X', pattern: /(?:twitter|x)\.com\/[a-zA-Z0-9._-]+/i },
+			{ name: 'Instagram', pattern: /instagram\.com\/[a-zA-Z0-9._-]+/i },
+			{ name: 'LinkedIn', pattern: /linkedin\.com\/(?:company|in)\/[a-zA-Z0-9._-]+/i },
+			{ name: 'YouTube', pattern: /youtube\.com\/(?:channel|c|@|user)\/[a-zA-Z0-9._-]+/i },
+			{ name: 'GitHub', pattern: /github\.com\/[a-zA-Z0-9._-]+/i },
+			{ name: 'TikTok', pattern: /tiktok\.com\/@[a-zA-Z0-9._-]+/i },
+			{ name: 'Pinterest', pattern: /pinterest\.com\/[a-zA-Z0-9._-]+/i },
+		];
+		const socialLinks: { name: string; url: string }[] = [];
+		for (const sp of socialPatterns) {
+			const m = mainHtml.match(sp.pattern);
+			if (m) socialLinks.push({ name: sp.name, url: m[0] });
+		}
+
+		// Content analysis
+		const bodyMatch = mainHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+		const bodyContent = bodyMatch ? bodyMatch[1].replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() : '';
+		const wordCount = bodyContent.split(/\s+/).filter(w => w.length > 0).length;
+		const textLength = bodyContent.length;
+
+		// Check for noindex, nofollow directives
+		const hasNoIndex = robotsMeta ? /noindex/i.test(robotsMeta) : false;
+		const hasNoFollow = robotsMeta ? /nofollow/i.test(robotsMeta) : false;
+
+		// Check for HTTP headers
+		const xRobotsTag = mainResp.headers.get('x-robots-tag');
+		const contentType = mainResp.headers.get('content-type');
+
+		// Favicon
+		const faviconMatch = mainHtml.match(/<link[^>]+rel=["'](?:shortcut )?icon["'][^>]+href=["']([^"']*)["']/i)
+			|| mainHtml.match(/<link[^>]+href=["']([^"']*)["'][^>]+rel=["'](?:shortcut )?icon["']/i);
+		const favicon = faviconMatch ? faviconMatch[1] : null;
+
+		// CSS/JS inline vs external
+		const inlineStyles = (mainHtml.match(/<style[\s\S]*?<\/style>/gi) || []).length;
+		const inlineScripts = (mainHtml.match(/<script(?![^>]*src=)[^>]*>[\s\S]*?<\/script>/gi) || []).length;
+		const externalCSS = [...mainHtml.matchAll(/<link[^>]+rel=["']stylesheet["'][^>]*>/gi)].length;
+		const externalJS = [...mainHtml.matchAll(/<script[^>]+src=["'][^"']+["'][^>]*>/gi)].length;
+
+		// Check for AMP
+		const isAMP = /<html[^>]*\s(?:amp|⚡)/i.test(mainHtml);
+
+		// Check for PWA manifest
+		const manifestMatch = mainHtml.match(/<link[^>]+rel=["']manifest["'][^>]+href=["']([^"']*)["']/i);
+		const hasManifest = !!manifestMatch;
+
+		// Doctype
+		const hasDoctype = /^<!DOCTYPE\s+html>/i.test(mainHtml.trim());
+
+		// Check if HTTPS
+		const isHTTPS = parsedTarget.protocol === 'https:';
+
+		// ---- Additional SEO data ----
+		const urlPath = parsedTarget.pathname;
+		const urlAnalysis = {
+			length: finalUrl.length,
+			pathLength: urlPath.length,
+			hasTrailingSlash: urlPath.endsWith('/') && urlPath !== '/',
+			hasUnderscore: urlPath.includes('_'),
+			hasUppercase: /[A-Z]/.test(urlPath),
+			hasSpecialChars: /[^a-zA-Z0-9\-_\/.]/.test(urlPath.replace(/^\//, '')),
+			depth: urlPath.split('/').filter(s => s).length,
+			hasExtension: /\.[a-z]{2,5}$/i.test(urlPath),
+			isClean: !/[?&=]/.test(urlPath) && urlPath.length < 100 && !/[A-Z_]/.test(urlPath),
+		};
+
+		// HTTP response headers for SEO
+		const seoHeaders: Record<string, string | null> = {
+			'content-type': mainResp.headers.get('content-type'),
+			'content-encoding': mainResp.headers.get('content-encoding'),
+			'cache-control': mainResp.headers.get('cache-control'),
+			'x-robots-tag': mainResp.headers.get('x-robots-tag'),
+			'x-frame-options': mainResp.headers.get('x-frame-options'),
+			'content-security-policy': mainResp.headers.get('content-security-policy') ? 'Present' : null,
+			'strict-transport-security': mainResp.headers.get('strict-transport-security'),
+			'server': mainResp.headers.get('server'),
+			'vary': mainResp.headers.get('vary'),
+			'x-powered-by': mainResp.headers.get('x-powered-by'),
+			'link': mainResp.headers.get('link'),
+		};
+
+		// Page size (use string length as approximation; safe for Workers memory)
+		const htmlSize = mainHtml.length;
+
+		// Text-to-HTML ratio
+		const textToHtmlRatio = htmlSize > 0 ? Math.round((textLength / htmlSize) * 100) : 0;
+
+		// Redirect detection
+		const wasRedirected = mainResp.redirected || (mainResp.url && mainResp.url !== targetUrl);
+		const redirectTarget = wasRedirected ? mainResp.url : null;
+
+		// Mixed content detection (http:// resources on https page)
+		const mixedContent: string[] = [];
+		if (isHTTPS) {
+			const httpResources = [...mainHtml.matchAll(/(?:src|href|action)=["'](http:\/\/[^"']+)["']/gi)];
+			for (const m of httpResources.slice(0, 20)) {
+				mixedContent.push(m[1].substring(0, 150));
+			}
+		}
+
+		// Meta tags: author, generator, theme-color
+		const metaAuthor = getMetaContent('author');
+		const metaGenerator = getMetaContent('generator');
+		const themeColor = getMetaContent('theme-color');
+
+		// Apple-touch-icon
+		const appleTouchIcon = mainHtml.match(/<link[^>]+rel=["']apple-touch-icon["'][^>]+href=["']([^"']*)["']/i);
+
+		// Preconnect / Prefetch / Preload hints
+		const preconnects = [...mainHtml.matchAll(/<link[^>]+rel=["']preconnect["'][^>]+href=["']([^"']*)["']/gi)].map(m => m[1]);
+		const prefetches = [...mainHtml.matchAll(/<link[^>]+rel=["'](?:dns-prefetch|prefetch)["'][^>]+href=["']([^"']*)["']/gi)].map(m => m[1]);
+		const preloads = [...mainHtml.matchAll(/<link[^>]+rel=["']preload["'][^>]+href=["']([^"']*)["']/gi)].map(m => m[1]);
+
+		// Keyword extraction (top words from body text)
+		const stopWords = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'it', 'this', 'that', 'are', 'was', 'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'can', 'could', 'would', 'should', 'not', 'from', 'they', 'we', 'you', 'he', 'she', 'its', 'their', 'our', 'your', 'my', 'all', 'each', 'every', 'both', 'more', 'other', 'some', 'such', 'no', 'nor', 'so', 'than', 'too', 'very', 'just', 'about', 'up', 'out', 'if', 'what', 'which', 'who', 'how', 'when', 'where', 'why', 'been', 'being', 'into', 'through', 'during', 'before', 'after', 'above', 'below', 'between', 'same', 'then', 'here', 'there', 'also', 'de', 'la', 'le', 'les', 'un', 'une', 'des', 'du', 'et', 'en', 'est', 'que', 'qui', 'dans', 'pour', 'pas', 'sur', 'plus', 'par', 'au', 'ce', 'il', 'se', 'ne', 'son', 'avec', 'nous', 'vous', 'mais', 'ou', 'si', 'comme', 'ses', 'sa', 'aux', 'ces', 'mon', 'ma', 'mes', 'nos', 'vos', 'leur', 'leurs']);
+		const wordFreq: Record<string, number> = {};
+		const words = bodyContent.toLowerCase().split(/[\s,.!?;:()\[\]{}"']+/).filter(w => w.length >= 3 && !stopWords.has(w) && !/^\d+$/.test(w));
+		for (const w of words) {
+			wordFreq[w] = (wordFreq[w] || 0) + 1;
+		}
+		const topKeywords = Object.entries(wordFreq).sort((a, b) => b[1] - a[1]).slice(0, 20).map(([word, count]) => ({
+			word, count, density: Math.round((count / Math.max(words.length, 1)) * 10000) / 100,
+		}));
+
+		// Readability estimation (avg sentence length + avg word length)
+		const sentences = bodyContent.split(/[.!?]+/).filter(s => s.trim().length > 10);
+		const avgSentenceLength = sentences.length > 0 ? Math.round(wordCount / sentences.length) : 0;
+		const avgWordLength = words.length > 0 ? Math.round(words.reduce((sum, w) => sum + w.length, 0) / words.length * 10) / 10 : 0;
+		// Simple readability index (Automated Readability Index approximation)
+		const readabilityScore = sentences.length > 0 ? Math.round(4.71 * avgWordLength + 0.5 * avgSentenceLength - 21.43) : 0;
+		const readability = {
+			avgSentenceLength,
+			avgWordLength,
+			sentenceCount: sentences.length,
+			readabilityIndex: Math.max(0, Math.min(20, readabilityScore)),
+			level: readabilityScore <= 6 ? 'Easy' : readabilityScore <= 10 ? 'Medium' : readabilityScore <= 14 ? 'Hard' : 'Very Hard',
+		};
+
+		// Nofollow link ratio
+		const nofollowInternalCount = internalLinks.filter(l => l.nofollow).length;
+		const nofollowExternalCount = externalLinks.filter(l => l.nofollow).length;
+
+		// Empty links (no text)
+		const emptyLinks = internalLinks.filter(l => !l.text.trim()).length + externalLinks.filter(l => !l.text.trim()).length;
+
+		// Iframes
+		const iframes = [...mainHtml.matchAll(/<iframe[^>]+src=["']([^"']*)["']/gi)].map(m => m[1].substring(0, 150));
+
+		// Forms without action
+		const formsTotal = (mainHtml.match(/<form/gi) || []).length;
+		const formsNoAction = (mainHtml.match(/<form(?![^>]*action=)/gi) || []).length;
+
+		// Deprecated HTML tags
+		const deprecatedTags = ['font', 'center', 'strike', 'marquee', 'blink', 'big', 'bgsound', 'frame', 'frameset'];
+		const foundDeprecated: string[] = [];
+		for (const tag of deprecatedTags) {
+			if (new RegExp(`<${tag}[\\s>]`, 'i').test(mainHtml)) foundDeprecated.push(tag);
+		}
+
+		// Accessibility basics
+		const accessibilityChecks = {
+			hasLang: !!lang,
+			hasSkipNav: /skip[\s-]*(?:to[\s-]*)?(?:content|nav|main)/i.test(mainHtml),
+			hasAriaLandmarks: /role=["'](?:banner|navigation|main|contentinfo)["']/i.test(mainHtml) || /<(?:header|nav|main|footer)[^>]*>/i.test(mainHtml),
+			formsHaveLabels: !(/<input(?![^>]*type=["'](?:hidden|submit|button)["'])[^>]*>/i.test(mainHtml) && !/<label/i.test(mainHtml)),
+			tabindex: (mainHtml.match(/tabindex=/gi) || []).length,
+			ariaAttributes: (mainHtml.match(/aria-/gi) || []).length,
+			roleAttributes: (mainHtml.match(/role=/gi) || []).length,
+		};
+
+		// Resource hints summary
+		const resourceHints = {
+			preconnect: preconnects.slice(0, 10),
+			prefetch: prefetches.slice(0, 10),
+			preload: preloads.slice(0, 10),
+		};
+
+		// ---- Phase 4: Robots.txt analysis ----
+		const robotsAnalysis: { exists: boolean; sitemapUrls: string[]; disallowedPaths: string[]; allowedPaths: string[]; userAgents: string[]; crawlDelay: number | null } = {
+			exists: !!robotsTxt,
+			sitemapUrls: [],
+			disallowedPaths: [],
+			allowedPaths: [],
+			userAgents: [],
+			crawlDelay: null,
+		};
+		if (robotsTxt) {
+			const lines = robotsTxt.split('\n');
+			for (const line of lines) {
+				const trimmed = line.trim();
+				if (trimmed.toLowerCase().startsWith('sitemap:')) {
+					robotsAnalysis.sitemapUrls.push(trimmed.substring(8).trim());
+				} else if (trimmed.toLowerCase().startsWith('disallow:')) {
+					const path = trimmed.substring(9).trim();
+					if (path && robotsAnalysis.disallowedPaths.length < 50) robotsAnalysis.disallowedPaths.push(path);
+				} else if (trimmed.toLowerCase().startsWith('allow:')) {
+					const path = trimmed.substring(6).trim();
+					if (path && robotsAnalysis.allowedPaths.length < 50) robotsAnalysis.allowedPaths.push(path);
+				} else if (trimmed.toLowerCase().startsWith('user-agent:')) {
+					const ua = trimmed.substring(11).trim();
+					if (ua && !robotsAnalysis.userAgents.includes(ua)) robotsAnalysis.userAgents.push(ua);
+				} else if (trimmed.toLowerCase().startsWith('crawl-delay:')) {
+					robotsAnalysis.crawlDelay = parseFloat(trimmed.substring(12).trim()) || null;
+				}
+			}
+		}
+
+		// ---- Phase 5: Sitemap analysis ----
+		const sitemapAnalysis: { exists: boolean; format: string | null; urls: number; sampleUrls: string[]; lastmod: string | null; nestedSitemaps: string[] } = {
+			exists: false,
+			format: null,
+			urls: 0,
+			sampleUrls: [],
+			lastmod: null,
+			nestedSitemaps: [],
+		};
+
+		let sitemapContent = sitemapXml;
+		// Try sitemap from robots.txt if direct fetch failed
+		if (!sitemapContent && robotsAnalysis.sitemapUrls.length > 0) {
+			try {
+				const smResp = await fetchWithTimeout(robotsAnalysis.sitemapUrls[0], {}, 5000);
+				if (smResp.ok) sitemapContent = await smResp.text();
+			} catch { /* ignore */ }
+		}
+		// Also try /sitemap_index.xml
+		if (!sitemapContent) {
+			try {
+				const smResp = await fetchWithTimeout(`${origin}/sitemap_index.xml`, {}, 5000);
+				if (smResp.ok) {
+					const txt = await smResp.text();
+					if (txt.includes('<sitemapindex') || txt.includes('<urlset')) sitemapContent = txt;
+				}
+			} catch { /* ignore */ }
+		}
+
+		if (sitemapContent) {
+			sitemapAnalysis.exists = true;
+			if (sitemapContent.includes('<sitemapindex')) {
+				sitemapAnalysis.format = 'Sitemap Index';
+				const nestedUrls = [...sitemapContent.matchAll(/<loc>\s*(.*?)\s*<\/loc>/gi)];
+				sitemapAnalysis.nestedSitemaps = nestedUrls.slice(0, 20).map(m => m[1]);
+				sitemapAnalysis.urls = nestedUrls.length;
+				// Fetch first nested sitemap to count URLs
+				if (sitemapAnalysis.nestedSitemaps.length > 0) {
+					try {
+						const nestedResp = await fetchWithTimeout(sitemapAnalysis.nestedSitemaps[0], {}, 5000);
+						if (nestedResp.ok) {
+							const nestedTxt = await nestedResp.text();
+							const nestedLocs = [...nestedTxt.matchAll(/<loc>\s*(.*?)\s*<\/loc>/gi)];
+							sitemapAnalysis.sampleUrls = nestedLocs.slice(0, 10).map(m => m[1]);
+							sitemapAnalysis.urls = nestedLocs.length;
+							const lastmodM = nestedTxt.match(/<lastmod>\s*(.*?)\s*<\/lastmod>/i);
+							if (lastmodM) sitemapAnalysis.lastmod = lastmodM[1];
+						}
+					} catch { /* ignore */ }
+				}
+			} else if (sitemapContent.includes('<urlset')) {
+				sitemapAnalysis.format = 'URL Set';
+				const locs = [...sitemapContent.matchAll(/<loc>\s*(.*?)\s*<\/loc>/gi)];
+				sitemapAnalysis.urls = locs.length;
+				sitemapAnalysis.sampleUrls = locs.slice(0, 10).map(m => m[1]);
+				const lastmodM = sitemapContent.match(/<lastmod>\s*(.*?)\s*<\/lastmod>/i);
+				if (lastmodM) sitemapAnalysis.lastmod = lastmodM[1];
+			} else {
+				sitemapAnalysis.format = 'Unknown/Text';
+				const lines = sitemapContent.split('\n').filter(l => l.trim().startsWith('http'));
+				sitemapAnalysis.urls = lines.length;
+				sitemapAnalysis.sampleUrls = lines.slice(0, 10);
+			}
+		}
+
+		// ---- Phase 6: Crawl discovered internal pages (max 5) ----
+		const uniqueInternalPaths = [...new Set(internalLinks.map(l => l.url))].filter(u => u !== '/' && u !== parsedTarget.pathname);
+		const pagesToCrawl = uniqueInternalPaths.slice(0, 5);
+		const crawledPages: {
+			url: string;
+			statusCode: number;
+			title: string | null;
+			metaDescription: string | null;
+			h1: string | null;
+			wordCount: number;
+			canonical: string | null;
+			issues: string[];
+		}[] = [];
+
+		const crawlPromises = pagesToCrawl.map(async (path) => {
+			try {
+				const pageUrl = `${origin}${path}`;
+				const resp = await fetchWithTimeout(pageUrl, {
+					headers: seoFetchHeaders,
+					redirect: 'follow',
+				}, 5000);
+				const html = await resp.text();
+				const pTitle = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+				const pDesc = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i)
+					|| html.match(/<meta[^>]+content=["']([^"']*)["'][^>]+name=["']description["']/i);
+				const pH1 = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+				const pCanonical = html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']*)["']/i);
+				const pBody = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+				const pText = pBody ? pBody[1].replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() : '';
+				const pWordCount = pText.split(/\s+/).filter(w => w.length > 0).length;
+
+				const issues: string[] = [];
+				const t = pTitle ? pTitle[1].trim() : null;
+				if (!t) issues.push('Missing title');
+				else if (t.length < 10) issues.push('Title too short');
+				else if (t.length > 60) issues.push('Title too long');
+				const d = pDesc ? pDesc[1] : null;
+				if (!d) issues.push('Missing meta description');
+				else if (d.length < 50) issues.push('Meta description too short');
+				else if (d.length > 160) issues.push('Meta description too long');
+				const h = pH1 ? pH1[1].replace(/<[^>]+>/g, '').trim() : null;
+				if (!h) issues.push('Missing H1');
+				if (pWordCount < 100) issues.push('Thin content');
+				if (!pCanonical) issues.push('Missing canonical');
+
+				return {
+					url: path,
+					statusCode: resp.status,
+					title: t,
+					metaDescription: d ? d.substring(0, 160) : null,
+					h1: h ? h.substring(0, 150) : null,
+					wordCount: pWordCount,
+					canonical: pCanonical ? pCanonical[1] : null,
+					issues,
+				};
+			} catch {
+				return { url: path, statusCode: 0, title: null, metaDescription: null, h1: null, wordCount: 0, canonical: null, issues: ['Failed to fetch'] };
+			}
+		});
+		const crawlResults = await Promise.allSettled(crawlPromises);
+		for (const r of crawlResults) {
+			if (r.status === 'fulfilled') crawledPages.push(r.value);
+		}
+
+		// ---- Phase 7: Scoring ----
+		const checks: { category: string; label: string; pass: boolean; detail: string; weight: number }[] = [];
+
+		// Title
+		if (title) {
+			checks.push({ category: 'Meta Tags', label: 'Title tag present', pass: true, detail: `"${title.substring(0, 60)}"`, weight: 5 });
+			if (title.length >= 10 && title.length <= 60) {
+				checks.push({ category: 'Meta Tags', label: 'Title length optimal (10-60 chars)', pass: true, detail: `${title.length} characters`, weight: 3 });
+			} else {
+				checks.push({ category: 'Meta Tags', label: 'Title length optimal (10-60 chars)', pass: false, detail: `${title.length} characters (${title.length < 10 ? 'too short' : 'too long'})`, weight: 3 });
+			}
+		} else {
+			checks.push({ category: 'Meta Tags', label: 'Title tag present', pass: false, detail: 'Missing <title>', weight: 5 });
+		}
+
+		// Description
+		if (metaDescription) {
+			checks.push({ category: 'Meta Tags', label: 'Meta description present', pass: true, detail: `${metaDescription.length} characters`, weight: 4 });
+			if (metaDescription.length >= 50 && metaDescription.length <= 160) {
+				checks.push({ category: 'Meta Tags', label: 'Meta description length optimal (50-160 chars)', pass: true, detail: `${metaDescription.length} characters`, weight: 2 });
+			} else {
+				checks.push({ category: 'Meta Tags', label: 'Meta description length optimal (50-160 chars)', pass: false, detail: `${metaDescription.length} characters (${metaDescription.length < 50 ? 'too short' : 'too long'})`, weight: 2 });
+			}
+		} else {
+			checks.push({ category: 'Meta Tags', label: 'Meta description present', pass: false, detail: 'Missing meta description', weight: 4 });
+		}
+
+		// Viewport
+		checks.push({ category: 'Meta Tags', label: 'Viewport meta tag', pass: !!viewport, detail: viewport || 'Missing', weight: 3 });
+
+		// Canonical
+		checks.push({ category: 'Meta Tags', label: 'Canonical URL defined', pass: !!canonical, detail: canonical || 'Missing canonical tag', weight: 3 });
+
+		// Language
+		checks.push({ category: 'Meta Tags', label: 'HTML lang attribute', pass: !!lang, detail: lang || 'Missing lang attribute', weight: 2 });
+
+		// Charset
+		checks.push({ category: 'Meta Tags', label: 'Charset declaration', pass: !!charset, detail: charset || 'Missing charset', weight: 2 });
+
+		// Doctype
+		checks.push({ category: 'Technical', label: 'HTML doctype declared', pass: hasDoctype, detail: hasDoctype ? '<!DOCTYPE html>' : 'Missing doctype', weight: 1 });
+
+		// HTTPS
+		checks.push({ category: 'Technical', label: 'HTTPS enabled', pass: isHTTPS, detail: isHTTPS ? 'Secure connection' : 'HTTP only — not secure', weight: 4 });
+
+		// Favicon
+		checks.push({ category: 'Technical', label: 'Favicon defined', pass: !!favicon, detail: favicon ? favicon.substring(0, 100) : 'Missing favicon', weight: 1 });
+
+		// Robots meta
+		checks.push({ category: 'Indexability', label: 'Page is indexable', pass: !hasNoIndex, detail: hasNoIndex ? 'noindex set' : (robotsMeta || 'No robots restriction'), weight: 4 });
+		checks.push({ category: 'Indexability', label: 'Page is followable', pass: !hasNoFollow, detail: hasNoFollow ? 'nofollow set' : 'Links are followed', weight: 2 });
+
+		// Robots.txt
+		checks.push({ category: 'Indexability', label: 'robots.txt exists', pass: robotsAnalysis.exists, detail: robotsAnalysis.exists ? `${robotsAnalysis.disallowedPaths.length} disallow rules` : 'Not found', weight: 2 });
+
+		// Sitemap
+		checks.push({ category: 'Indexability', label: 'Sitemap found', pass: sitemapAnalysis.exists, detail: sitemapAnalysis.exists ? `${sitemapAnalysis.urls} URLs (${sitemapAnalysis.format})` : 'No sitemap found', weight: 3 });
+
+		// H1
+		const h1Tags = headings.filter(h => h.tag === 'H1');
+		if (h1Tags.length === 1) {
+			checks.push({ category: 'Content', label: 'Single H1 tag', pass: true, detail: `"${h1Tags[0].text.substring(0, 60)}"`, weight: 3 });
+		} else if (h1Tags.length === 0) {
+			checks.push({ category: 'Content', label: 'Single H1 tag', pass: false, detail: 'No H1 tag found', weight: 3 });
+		} else {
+			checks.push({ category: 'Content', label: 'Single H1 tag', pass: false, detail: `${h1Tags.length} H1 tags (should be 1)`, weight: 3 });
+		}
+
+		// Heading hierarchy
+		const headingTags = headings.map(h => parseInt(h.tag[1]));
+		let hasSkip = false;
+		for (let i = 1; i < headingTags.length; i++) {
+			if (headingTags[i] > headingTags[i - 1] + 1) { hasSkip = true; break; }
+		}
+		checks.push({ category: 'Content', label: 'Heading hierarchy valid', pass: !hasSkip, detail: hasSkip ? 'Heading level skipped (e.g. H2→H4)' : 'Sequential heading levels', weight: 2 });
+
+		// Content length
+		if (wordCount >= 300) {
+			checks.push({ category: 'Content', label: 'Sufficient content length', pass: true, detail: `${wordCount} words`, weight: 3 });
+		} else {
+			checks.push({ category: 'Content', label: 'Sufficient content length', pass: false, detail: `${wordCount} words (recommended: 300+)`, weight: 3 });
+		}
+
+		// Image alt tags
+		const imgsWithoutAlt = images.filter(img => !img.hasAlt);
+		const altPct = images.length > 0 ? Math.round(((images.length - imgsWithoutAlt.length) / images.length) * 100) : 100;
+		checks.push({ category: 'Content', label: 'Images have alt attributes', pass: imgsWithoutAlt.length === 0, detail: `${altPct}% of ${images.length} images have alt`, weight: 3 });
+
+		// Image dimensions
+		const imgsWithoutDim = images.filter(img => !img.width || !img.height);
+		checks.push({ category: 'Performance', label: 'Images have width/height', pass: imgsWithoutDim.length === 0 || images.length === 0, detail: `${images.length - imgsWithoutDim.length}/${images.length} images have explicit dimensions`, weight: 2 });
+
+		// Lazy loading
+		const lazyImgs = images.filter(img => img.lazy);
+		checks.push({ category: 'Performance', label: 'Lazy loading on images', pass: lazyImgs.length > 0 || images.length <= 3, detail: `${lazyImgs.length}/${images.length} images use lazy loading`, weight: 2 });
+
+		// Open Graph
+		const hasOG = !!(ogTitle && ogDescription && ogImage);
+		checks.push({ category: 'Social', label: 'Open Graph tags complete', pass: hasOG, detail: hasOG ? 'og:title, og:description, og:image present' : 'Missing OG tags', weight: 3 });
+
+		// Twitter Card
+		const hasTwitter = !!(twitterCard && twitterTitle);
+		checks.push({ category: 'Social', label: 'Twitter Card tags', pass: hasTwitter, detail: hasTwitter ? `Card type: ${twitterCard}` : 'Missing Twitter Card tags', weight: 2 });
+
+		// Structured Data
+		checks.push({ category: 'Social', label: 'Structured Data (JSON-LD)', pass: structuredData.length > 0, detail: structuredData.length > 0 ? `${structuredData.length} schema(s): ${structuredData.map(s => s.type).join(', ')}` : 'No structured data found', weight: 3 });
+
+		// Hreflang
+		if (hreflangs.length > 0) {
+			checks.push({ category: 'International', label: 'Hreflang tags present', pass: true, detail: `${hreflangs.length} language variants`, weight: 2 });
+		}
+
+		// Internal links
+		checks.push({ category: 'Links', label: 'Internal links present', pass: internalLinks.length >= 3, detail: `${internalLinks.length} internal links found`, weight: 2 });
+
+		// External links
+		checks.push({ category: 'Links', label: 'External links present', pass: externalLinks.length > 0, detail: `${externalLinks.length} external links`, weight: 1 });
+
+		// PWA
+		checks.push({ category: 'Technical', label: 'Web App Manifest', pass: hasManifest, detail: hasManifest ? 'manifest.json linked' : 'No PWA manifest', weight: 1 });
+
+		// Social links
+		checks.push({ category: 'Social', label: 'Social media links', pass: socialLinks.length >= 2, detail: `${socialLinks.length} social profile(s) found`, weight: 1 });
+
+		// URL quality
+		checks.push({ category: 'URL', label: 'URL length under 100 chars', pass: finalUrl.length <= 100, detail: `${finalUrl.length} characters`, weight: 2 });
+		checks.push({ category: 'URL', label: 'No uppercase in URL path', pass: !urlAnalysis.hasUppercase, detail: urlAnalysis.hasUppercase ? 'Contains uppercase letters' : 'All lowercase', weight: 1 });
+		checks.push({ category: 'URL', label: 'No underscores in URL', pass: !urlAnalysis.hasUnderscore, detail: urlAnalysis.hasUnderscore ? 'Underscores found (use hyphens)' : 'Clean URL', weight: 1 });
+		checks.push({ category: 'URL', label: 'No special characters', pass: !urlAnalysis.hasSpecialChars, detail: urlAnalysis.hasSpecialChars ? 'Special characters detected' : 'Clean path', weight: 1 });
+
+		// Page size
+		checks.push({ category: 'Performance', label: 'HTML size under 100 KB', pass: htmlSize < 102400, detail: `${(htmlSize / 1024).toFixed(1)} KB`, weight: 2 });
+
+		// Text-to-HTML ratio
+		checks.push({ category: 'Content', label: 'Text-to-HTML ratio > 10%', pass: textToHtmlRatio >= 10, detail: `${textToHtmlRatio}% text vs HTML`, weight: 2 });
+
+		// Mixed content
+		checks.push({ category: 'Technical', label: 'No mixed content', pass: mixedContent.length === 0, detail: mixedContent.length > 0 ? `${mixedContent.length} HTTP resources on HTTPS page` : 'Clean', weight: 3 });
+
+		// Deprecated tags
+		checks.push({ category: 'Technical', label: 'No deprecated HTML tags', pass: foundDeprecated.length === 0, detail: foundDeprecated.length > 0 ? `Found: ${foundDeprecated.join(', ')}` : 'Modern HTML', weight: 1 });
+
+		// Inline styles/scripts ratio
+		const tooManyInline = inlineStyles > 5 || inlineScripts > 10;
+		checks.push({ category: 'Performance', label: 'Minimal inline code', pass: !tooManyInline, detail: `${inlineStyles} inline styles, ${inlineScripts} inline scripts`, weight: 1 });
+
+		// Empty links
+		checks.push({ category: 'Links', label: 'No empty anchor text', pass: emptyLinks === 0, detail: emptyLinks > 0 ? `${emptyLinks} links with no text` : 'All links have text', weight: 2 });
+
+		// Resource hints
+		checks.push({ category: 'Performance', label: 'Resource hints used', pass: preconnects.length > 0 || preloads.length > 0, detail: `${preconnects.length} preconnect, ${preloads.length} preload, ${prefetches.length} prefetch`, weight: 1 });
+
+		// Accessibility
+		checks.push({ category: 'Accessibility', label: 'Skip navigation link', pass: accessibilityChecks.hasSkipNav, detail: accessibilityChecks.hasSkipNav ? 'Present' : 'Missing skip-to-content link', weight: 2 });
+		checks.push({ category: 'Accessibility', label: 'ARIA landmarks', pass: accessibilityChecks.hasAriaLandmarks, detail: accessibilityChecks.hasAriaLandmarks ? 'Semantic HTML5 or ARIA roles present' : 'Missing landmarks', weight: 2 });
+		checks.push({ category: 'Accessibility', label: 'Form labels present', pass: accessibilityChecks.formsHaveLabels, detail: accessibilityChecks.formsHaveLabels ? 'Forms have labels' : 'Inputs missing labels', weight: 2 });
+
+		// Calculate score
+		const totalWeight = checks.reduce((sum, c) => sum + c.weight, 0);
+		const earnedWeight = checks.filter(c => c.pass).reduce((sum, c) => sum + c.weight, 0);
+		const score = Math.round((earnedWeight / totalWeight) * 100);
+		const grade = score >= 90 ? 'A' : score >= 80 ? 'B' : score >= 70 ? 'C' : score >= 50 ? 'D' : 'F';
+
+		// Group checks by category
+		const checksByCategory: Record<string, typeof checks> = {};
+		for (const c of checks) {
+			if (!checksByCategory[c.category]) checksByCategory[c.category] = [];
+			checksByCategory[c.category].push(c);
+		}
+
+		return new Response(
+			JSON.stringify({
+				url: targetUrl,
+				finalUrl,
+				hostname,
+				statusCode: mainResp.status,
+				responseTime: mainTime,
+				isHTTPS,
+				wasRedirected,
+				redirectTarget,
+				// Meta tags
+				meta: { title, titleLength: title?.length || 0, metaDescription, descriptionLength: metaDescription?.length || 0, viewport, canonical, robotsMeta, charset, lang, favicon, hasDoctype, isAMP, hasManifest, author: metaAuthor, generator: metaGenerator, themeColor, appleTouchIcon: appleTouchIcon ? appleTouchIcon[1] : null },
+				// URL analysis
+				urlAnalysis,
+				// HTTP Headers
+				seoHeaders,
+				// Page size & ratio
+				pageSize: { htmlSize, textLength, textToHtmlRatio },
+				// Open Graph
+				openGraph: { title: ogTitle, description: ogDescription, image: ogImage, url: ogUrl, type: ogType, siteName: ogSiteName },
+				// Twitter Card
+				twitterCard: { card: twitterCard, title: twitterTitle, description: twitterDescription, image: twitterImage },
+				// Content
+				content: { wordCount, textLength, headings, h1Tags, imagesTotal: images.length, imagesWithoutAlt: imgsWithoutAlt.length, imagesWithoutDimensions: imgsWithoutDim.length, lazyImages: lazyImgs.length, inlineStyles, inlineScripts, externalCSS, externalJS },
+				// Keywords
+				topKeywords,
+				// Readability
+				readability,
+				// Links
+				links: { internalCount: internalLinks.length, externalCount: externalLinks.length, nofollowInternal: nofollowInternalCount, nofollowExternal: nofollowExternalCount, emptyLinks, internalLinks: internalLinks.slice(0, 30), externalLinks: externalLinks.slice(0, 20) },
+				// Structured Data
+				structuredData,
+				// Social
+				socialLinks,
+				// Hreflang
+				hreflangs,
+				// Robots
+				robots: robotsAnalysis,
+				// Sitemap
+				sitemap: sitemapAnalysis,
+				// Crawled pages
+				crawledPages,
+				// Mixed content
+				mixedContent,
+				// Deprecated HTML
+				deprecatedTags: foundDeprecated,
+				// Iframes
+				iframes,
+				// Accessibility
+				accessibility: accessibilityChecks,
+				// Resource hints
+				resourceHints,
+				// Score
+				score,
+				grade,
+				checks,
+				checksByCategory,
+				timestamp: new Date().toISOString(),
+			}),
+			{ headers: { 'content-type': 'application/json; charset=UTF-8' } },
+		);
+	} catch (error) {
+		console.error('[SEO Audit] Error:', error instanceof Error ? error.stack || error.message : error);
+		return new Response(
+			JSON.stringify({ error: 'SEO audit failed', message: error instanceof Error ? error.message : 'Unknown error' }),
 			{ status: 500, headers: { 'content-type': 'application/json; charset=UTF-8' } },
 		);
 	}

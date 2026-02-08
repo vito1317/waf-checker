@@ -664,6 +664,13 @@ body::before {
 	min-height: 0;          /* allow flex child to shrink & enable overflow scroll */
 }
 
+/* Desktop: Tools grid in 4 columns */
+@media (min-width: 993px) {
+	#toolsBtns {
+		grid-template-columns: repeat(4, 1fr) !important;
+	}
+}
+
 main {
 	min-height: 0;          /* allow flex child to shrink below content size */
 }
@@ -730,7 +737,7 @@ main {
 		-webkit-overflow-scrolling: touch;
 	}
 
-	/* Target panel: compact buttons on mobile */
+	/* Target panel: compact on mobile */
 	#panelTarget {
 		padding: 0.5rem !important;
 	}
@@ -755,24 +762,28 @@ main {
 		font-size: 0.75rem !important;
 	}
 
-	#panelTarget .grid {
+	/* Secondary buttons */
+	#secondaryBtns {
 		gap: 0.35rem !important;
+		margin-bottom: 0.5rem !important;
 	}
 
-	#panelTarget #detectWafBtn,
-	#panelTarget #httpManipulationBtn {
-		padding-top: 0.4rem !important;
-		padding-bottom: 0.4rem !important;
+	#secondaryBtns button {
+		padding-top: 0.35rem !important;
+		padding-bottom: 0.35rem !important;
 		font-size: 0.65rem !important;
-		border-width: 1.5px !important;
 	}
 
-	#panelTarget #batchTestBtn {
-		padding-top: 0.4rem !important;
-		padding-bottom: 0.4rem !important;
-		font-size: 0.65rem !important;
-		margin-top: 0.35rem !important;
-		border-width: 1.5px !important;
+	/* Tools buttons: stay 2 cols on mobile, compact */
+	#toolsBtns {
+		grid-template-columns: repeat(2, 1fr) !important;
+		gap: 0.3rem !important;
+	}
+
+	#toolsBtns .tool-btn {
+		padding-top: 0.35rem !important;
+		padding-bottom: 0.35rem !important;
+		font-size: 0.6rem !important;
 	}
 
 	/* Prevent body scroll when drawer is open */
@@ -1126,9 +1137,21 @@ main {
 		max-height: 200px !important;
 	}
 
-	/* Buttons grid (Detect WAF / HTTP Tests) */
-	aside .grid-cols-2 {
+	/* Advanced panel grids: single column on tiny screens (but not target buttons) */
+	aside .grid-cols-2:not(#secondaryBtns) {
 		grid-template-columns: 1fr !important;
+	}
+
+	/* Tools: 2 columns on small screens */
+	#toolsBtns {
+		grid-template-columns: repeat(2, 1fr) !important;
+		gap: 0.25rem !important;
+	}
+
+	#toolsBtns .tool-btn {
+		padding-top: 0.3rem !important;
+		padding-bottom: 0.3rem !important;
+		font-size: 0.55rem !important;
 	}
 
 	/* Welcome placeholder: compact */
@@ -1341,6 +1364,30 @@ main {
 	/* Modals: edge to edge */
 	.fixed.inset-0 > .relative {
 		border-radius: 0.5rem !important;
+	}
+
+	/* Target widget: ultra compact */
+	#panelTarget #checkBtn {
+		padding-top: 0.4rem !important;
+		padding-bottom: 0.4rem !important;
+		font-size: 0.7rem !important;
+	}
+
+	#secondaryBtns button {
+		font-size: 0.55rem !important;
+		padding-top: 0.3rem !important;
+		padding-bottom: 0.3rem !important;
+	}
+
+	#toolsBtns {
+		grid-template-columns: repeat(2, 1fr) !important;
+		gap: 0.2rem !important;
+	}
+
+	#toolsBtns .tool-btn {
+		font-size: 0.5rem !important;
+		padding-top: 0.25rem !important;
+		padding-bottom: 0.25rem !important;
 	}
 
 	/* Analytics: single column */

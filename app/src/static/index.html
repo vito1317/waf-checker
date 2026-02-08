@@ -151,28 +151,42 @@
 								   class="w-full bg-cyber-elevated border border-cyber-accent/30 rounded-lg px-4 py-3 text-sm text-gray-100 placeholder-gray-500 focus:border-cyber-accent focus:ring-2 focus:ring-cyber-accent/30 outline-none transition-all"
 								   placeholder="https://target-url.com" required />
 						</div>
+						<!-- Primary -->
 						<button type="button" id="checkBtn" onclick="fetchResults()"
-								class="w-full bg-gradient-to-r from-cyber-accent to-cyan-500 text-cyber-bg font-bold py-3 rounded-lg mb-4 hover:shadow-lg hover:shadow-cyber-accent/40 transition-all uppercase text-sm tracking-wider">
+								class="w-full bg-gradient-to-r from-cyber-accent to-cyan-500 text-cyber-bg font-bold py-3 rounded-lg mb-3 hover:shadow-lg hover:shadow-cyber-accent/40 transition-all uppercase text-sm tracking-wider">
 							Start Check
 						</button>
-						<div class="grid grid-cols-2 gap-2 mb-2">
+						<!-- Secondary -->
+						<div id="secondaryBtns" class="grid grid-cols-2 gap-2 mb-3">
 							<button type="button" id="batchTestBtn" onclick="showBatchModal()"
-									class="border-2 border-cyber-success text-cyber-success py-2 rounded-lg hover:bg-cyber-success hover:text-cyber-bg transition-all uppercase text-[10px] font-bold tracking-wide">
+									class="border border-cyber-success/50 text-cyber-success py-1.5 rounded-lg hover:bg-cyber-success/15 transition-all uppercase text-[10px] font-bold tracking-wide">
 								Batch Test
 							</button>
 							<button type="button" id="httpManipulationBtn" onclick="testHTTPManipulation()"
-									class="border-2 border-cyber-warning text-cyber-warning py-2 rounded-lg hover:bg-cyber-warning hover:text-cyber-bg transition-all uppercase text-[10px] font-bold tracking-wide">
+									class="border border-cyber-warning/50 text-cyber-warning py-1.5 rounded-lg hover:bg-cyber-warning/15 transition-all uppercase text-[10px] font-bold tracking-wide">
 								HTTP Tests
 							</button>
 						</div>
-						<div class="grid grid-cols-2 gap-2">
+						<!-- Tools -->
+						<div class="mb-1">
+							<span class="text-[8px] text-gray-600 uppercase tracking-widest font-bold">Tools</span>
+						</div>
+						<div id="toolsBtns" class="grid grid-cols-2 gap-1.5">
 							<button type="button" onclick="runFullRecon()"
-									class="border border-emerald-500/50 text-emerald-400 py-1.5 rounded-lg hover:bg-emerald-500/20 transition-all uppercase text-[9px] font-bold tracking-wide leading-tight text-center">
+									class="tool-btn border border-emerald-500/40 text-emerald-400 py-1.5 rounded-lg hover:bg-emerald-500/15 transition-all uppercase text-[9px] font-bold tracking-wide leading-tight text-center">
 								Full Recon
 							</button>
 							<button type="button" onclick="runSecurityHeaders()"
-									class="border border-purple-500/50 text-purple-400 py-1.5 rounded-lg hover:bg-purple-500/20 transition-all uppercase text-[9px] font-bold tracking-wide leading-tight text-center">
+									class="tool-btn border border-purple-500/40 text-purple-400 py-1.5 rounded-lg hover:bg-purple-500/15 transition-all uppercase text-[9px] font-bold tracking-wide leading-tight text-center">
 								Headers
+							</button>
+							<button type="button" onclick="runSpeedTest()"
+									class="tool-btn border border-amber-500/40 text-amber-400 py-1.5 rounded-lg hover:bg-amber-500/15 transition-all uppercase text-[9px] font-bold tracking-wide leading-tight text-center">
+								Speed Test
+							</button>
+							<button type="button" onclick="runSEOTest()"
+									class="tool-btn border border-lime-500/40 text-lime-400 py-1.5 rounded-lg hover:bg-lime-500/15 transition-all uppercase text-[9px] font-bold tracking-wide leading-tight text-center">
+								SEO Audit
 							</button>
 						</div>
 					</div>
@@ -398,6 +412,20 @@
 										<span class="text-purple-400 text-xs font-bold uppercase">Security Headers</span>
 									</div>
 									<p class="text-[11px] text-gray-400">Audit CSP, HSTS, X-Frame-Options &amp; more</p>
+								</div>
+								<div class="bg-cyber-elevated/50 border border-amber-500/10 rounded-lg p-3">
+									<div class="flex items-center gap-1.5 mb-1">
+										<svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+										<span class="text-amber-400 text-xs font-bold uppercase">Speed Test</span>
+									</div>
+									<p class="text-[11px] text-gray-400">Page load performance, timing &amp; optimization</p>
+								</div>
+								<div class="bg-cyber-elevated/50 border border-lime-500/10 rounded-lg p-3">
+									<div class="flex items-center gap-1.5 mb-1">
+										<svg class="w-3.5 h-3.5 text-lime-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+										<span class="text-lime-400 text-xs font-bold uppercase">SEO Audit</span>
+									</div>
+									<p class="text-[11px] text-gray-400">Meta tags, sitemap, pages, structured data &amp; score</p>
 								</div>
 							</div>
 							

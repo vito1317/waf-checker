@@ -2192,6 +2192,8 @@ let batchPollInterval = null;
 let lastSecurityHeadersData = null;
 let lastDNSReconData = null; // kept for backward compat
 let lastFullReconData = null;
+let lastSpeedTestData = null;
+let lastSEOData = null;
 
 // Enhanced reporting and analytics functions
 function showExportControls() {
@@ -3376,6 +3378,8 @@ function _getReconData(type) {
 	if (type === 'headers') return lastSecurityHeadersData;
 	if (type === 'dns') return lastDNSReconData;
 	if (type === 'recon') return lastFullReconData;
+	if (type === 'speed') return lastSpeedTestData;
+	if (type === 'seo') return lastSEOData;
 	return null;
 }
 
@@ -3383,6 +3387,8 @@ function _getReconLabel(type) {
 	if (type === 'headers') return 'security-headers';
 	if (type === 'dns') return 'dns-whois';
 	if (type === 'recon') return 'full-recon';
+	if (type === 'speed') return 'speed-test';
+	if (type === 'seo') return 'seo-audit';
 	return 'export';
 }
 
@@ -3702,6 +3708,17 @@ async function exportReconScreenshot(event) {
 					el.style.overflow = 'visible';
 				});
 				clonedDoc.querySelectorAll('details').forEach(d => d.setAttribute('open', ''));
+
+				// Fix conic-gradient circles for html2canvas (may not support conic-gradient)
+				// Replace with simple bordered circles with the value
+				clonedDoc.querySelectorAll('[style*="conic-gradient"]').forEach(el => {
+					const innerDiv = el.querySelector('div');
+					const span = innerDiv ? innerDiv.querySelector('span') : el.querySelector('span');
+					const color = span ? span.style.color || '#10b981' : '#10b981';
+					const val = span ? span.textContent.trim() : '';
+					el.style.cssText = `width:56px;height:56px;border-radius:50%;border:3px solid ${color};display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.3);margin:0 auto;`;
+					el.innerHTML = `<span style="font-size:15px;font-weight:800;color:${color};font-family:system-ui,sans-serif">${val}</span>`;
+				});
 			}
 		});
 
@@ -5535,6 +5552,992 @@ function hideReconTip() {
 }
 
 // =============================================
+// FEATURE: SEO Audit
+// =============================================
+async function runSEOTest() {
+	const urlInput = document.getElementById('url');
+	const url = normalizeUrl(urlInput.value);
+	if (!url) { showAlert('Please enter a target URL first.', 'Missing URL', 'warning'); return; }
+	if (url !== urlInput.value) urlInput.value = url;
+
+	const resultsDiv = document.getElementById('results');
+	resultsDiv.innerHTML = `<div class="flex items-center justify-center h-full py-16">
+		${cyberLoader({ size: 'lg', color: 'text-lime-400', text: 'Running SEO Audit...', subtext: 'Meta tags, sitemap, pages, structured data, links... (max ~25s)' })}
+	</div>`;
+
+	try {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 30000);
+		const resp = await fetch(`/api/seo?url=${encodeURIComponent(url)}`, { signal: controller.signal });
+		clearTimeout(timeout);
+		const data = await resp.json();
+		if (!resp.ok) throw new Error(data.message || data.error || `HTTP ${resp.status}`);
+		displaySEOResults(data);
+	} catch (e) {
+		const msg = e.name === 'AbortError' ? 'Request timed out.' : e.message;
+		resultsDiv.innerHTML = `<div class="text-center py-10"><p class="text-cyber-danger font-bold">SEO Audit Failed</p><p class="text-gray-400 text-sm mt-2">${escapeHtml(msg)}</p><button onclick="runSEOTest()" class="mt-4 px-4 py-2 bg-lime-500/20 border border-lime-500/50 text-lime-400 rounded-lg hover:bg-lime-500/30 transition-all text-sm">Retry</button></div>`;
+	}
+}
+
+function displaySEOResults(data) {
+	lastSEOData = data;
+	const resultsDiv = document.getElementById('results');
+
+	// Score colors
+	const scoreHex = data.score >= 90 ? { text: '#34d399', border: 'rgba(16,185,129,0.3)', bg: 'rgba(16,185,129,0.1)' } :
+		data.score >= 80 ? { text: '#22d3ee', border: 'rgba(6,182,212,0.3)', bg: 'rgba(6,182,212,0.1)' } :
+		data.score >= 70 ? { text: '#facc15', border: 'rgba(234,179,8,0.3)', bg: 'rgba(234,179,8,0.1)' } :
+		data.score >= 50 ? { text: '#fb923c', border: 'rgba(249,115,22,0.3)', bg: 'rgba(249,115,22,0.1)' } :
+		{ text: '#f87171', border: 'rgba(239,68,68,0.3)', bg: 'rgba(239,68,68,0.1)' };
+
+	const passIcon = '<svg style="width:14px;height:14px;color:#10b981;flex-shrink:0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>';
+	const failIcon = '<svg style="width:14px;height:14px;color:#ef4444;flex-shrink:0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>';
+
+	const catColors = {
+		'Meta Tags': '#60a5fa', 'Technical': '#a78bfa', 'Indexability': '#34d399',
+		'Content': '#fbbf24', 'Links': '#22d3ee', 'Social': '#f472b6',
+		'Performance': '#fb923c', 'International': '#2dd4bf', 'URL': '#c084fc', 'Accessibility': '#38bdf8',
+	};
+
+	let html = `<div class="p-4">
+		<!-- Header -->
+		<div class="flex items-center justify-between mb-4 p-4" style="background:rgba(132,204,22,0.1);border:1px solid rgba(132,204,22,0.3);border-radius:12px">
+			<div class="flex items-center gap-3">
+				<div style="width:40px;height:40px;border-radius:8px;background:rgba(132,204,22,0.2);display:flex;align-items:center;justify-content:center">
+					<svg class="w-5 h-5" style="color:#a3e635" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+				</div>
+				<div>
+					<h3 style="font-size:14px;font-weight:700;color:#a3e635">SEO Audit</h3>
+					<p class="text-xs text-gray-400"><span class="font-mono text-white">${escapeHtml(data.hostname)}</span> &mdash; ${data.responseTime}ms</p>
+				</div>
+			</div>
+			<div class="flex items-center gap-1">
+				<button onclick="exportReconJSON('seo')" style="font-size:10px;background:#1c2128;border:1px solid rgba(132,204,22,0.3);color:#a3e635;padding:2px 8px;border-radius:4px;cursor:pointer">JSON</button>
+				<button onclick="exportReconHTML('seo')" style="font-size:10px;background:#1c2128;border:1px solid rgba(132,204,22,0.3);color:#a3e635;padding:2px 8px;border-radius:4px;cursor:pointer">HTML</button>
+				<button onclick="exportReconScreenshot(event)" style="font-size:10px;background:#1c2128;border:1px solid rgba(132,204,22,0.3);color:#a3e635;padding:2px 6px;border-radius:4px;cursor:pointer" title="Screenshot">
+					<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+				</button>
+			</div>
+		</div>
+
+		<!-- Score Card -->
+		<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(132,204,22,0.2)">
+			<div class="px-4 py-3 flex items-center justify-between">
+				<div class="flex items-center gap-4">
+					<div style="width:64px;height:64px;border-radius:12px;border:2px solid ${scoreHex.border};background:${scoreHex.bg};display:flex;align-items:center;justify-content:center">
+						<span style="font-size:1.5rem;font-weight:900;color:${scoreHex.text}">${data.grade}</span>
+					</div>
+					<div>
+						<div class="text-sm text-white font-bold">SEO Score: <span style="color:${scoreHex.text}">${data.score}/100</span></div>
+						<div class="text-xs text-gray-500 mt-0.5">${data.checks.filter(c => c.pass).length}/${data.checks.length} checks passed</div>
+					</div>
+				</div>
+				<div class="text-right text-[10px] text-gray-500">
+					<div>Status: <span class="text-white font-mono">${data.statusCode}</span></div>
+					<div>${data.isHTTPS ? '<span style="color:#10b981">HTTPS</span>' : '<span style="color:#ef4444">HTTP only</span>'}</div>
+				</div>
+			</div>
+			<div class="px-4 pb-3">
+				<div style="width:100%;background:rgba(55,65,81,0.5);border-radius:9999px;height:10px">
+					<div style="width:${data.score}%;background:${scoreHex.text};height:10px;border-radius:9999px;transition:width 0.5s"></div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Category Scores (horizontal bars) -->
+		<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(132,204,22,0.2)">
+			<div class="px-4 py-2.5" style="border-bottom:1px solid rgba(132,204,22,0.2);background:rgba(132,204,22,0.05)">
+				<h4 style="font-size:11px;font-weight:700;color:#a3e635;text-transform:uppercase;letter-spacing:0.05em">Score by Category</h4>
+			</div>
+			<div class="p-4 space-y-2">`;
+
+	// Compute per-category scores as horizontal bars
+	if (data.checksByCategory) {
+		for (const [cat, arr] of Object.entries(data.checksByCategory)) {
+			const catChecks = arr;
+			const totalW = catChecks.reduce((s, c) => s + c.weight, 0);
+			const earnedW = catChecks.filter(c => c.pass).reduce((s, c) => s + c.weight, 0);
+			const catScore = Math.round((earnedW / totalW) * 100);
+			const passed = catChecks.filter(c => c.pass).length;
+			const barColor = catScore >= 90 ? '#10b981' : catScore >= 50 ? '#f97316' : '#ef4444';
+			const accent = catColors[cat] || '#9ca3af';
+			html += `<div class="flex items-center gap-3">
+				<span style="font-size:10px;font-weight:600;color:${accent};width:100px;flex-shrink:0">${cat}</span>
+				<div style="flex:1;background:rgba(55,65,81,0.4);border-radius:9999px;height:8px;overflow:hidden">
+					<div style="width:${catScore}%;background:${barColor};height:8px;border-radius:9999px"></div>
+				</div>
+				<span style="font-size:11px;font-weight:800;color:${barColor};width:36px;text-align:right;font-family:monospace">${catScore}%</span>
+				<span style="font-size:9px;color:#6b7280;width:30px;text-align:right">${passed}/${catChecks.length}</span>
+			</div>`;
+		}
+	}
+	html += `</div></div>`;
+
+	// ---- Meta Tags Section ----
+	const m = data.meta;
+	html += `<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(59,130,246,0.2)">
+		<div class="px-4 py-2.5" style="border-bottom:1px solid rgba(59,130,246,0.2);background:rgba(59,130,246,0.05)">
+			<h4 style="font-size:11px;font-weight:700;color:#60a5fa;text-transform:uppercase;letter-spacing:0.05em">Meta Tags</h4>
+		</div>
+		<div class="divide-y divide-blue-500/10">
+			<div class="px-4 py-2 flex items-start gap-2">${m.title ? passIcon : failIcon}<div class="flex-1"><span class="text-xs text-white font-semibold">Title</span><div style="font-size:11px;color:#9ca3af;margin-top:2px">${m.title ? escapeHtml(m.title) : '<span style="color:#ef4444">Missing</span>'}</div>${m.title ? '<div style="font-size:9px;color:#6b7280;margin-top:1px">' + m.titleLength + ' characters' + (m.titleLength > 60 ? ' <span style="color:#f97316">(too long)</span>' : m.titleLength < 10 ? ' <span style="color:#f97316">(too short)</span>' : ' <span style="color:#10b981">(optimal)</span>') + '</div>' : ''}</div></div>
+			<div class="px-4 py-2 flex items-start gap-2">${m.metaDescription ? passIcon : failIcon}<div class="flex-1"><span class="text-xs text-white font-semibold">Meta Description</span><div style="font-size:11px;color:#9ca3af;margin-top:2px">${m.metaDescription ? escapeHtml(m.metaDescription.substring(0, 160)) : '<span style="color:#ef4444">Missing</span>'}</div>${m.metaDescription ? '<div style="font-size:9px;color:#6b7280;margin-top:1px">' + m.descriptionLength + ' characters' + (m.descriptionLength > 160 ? ' <span style="color:#f97316">(too long)</span>' : m.descriptionLength < 50 ? ' <span style="color:#f97316">(too short)</span>' : ' <span style="color:#10b981">(optimal)</span>') + '</div>' : ''}</div></div>
+			<div class="px-4 py-2 flex items-center gap-2">${m.viewport ? passIcon : failIcon}<span class="text-xs text-white">Viewport</span><span style="font-size:10px;color:#6b7280;margin-left:auto;font-family:monospace">${m.viewport ? escapeHtml(m.viewport.substring(0, 60)) : 'Missing'}</span></div>
+			<div class="px-4 py-2 flex items-center gap-2">${m.canonical ? passIcon : failIcon}<span class="text-xs text-white">Canonical</span><span style="font-size:10px;color:#6b7280;margin-left:auto;font-family:monospace;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.canonical ? escapeHtml(m.canonical) : 'Missing'}</span></div>
+			<div class="px-4 py-2 flex items-center gap-2">${m.lang ? passIcon : failIcon}<span class="text-xs text-white">Language</span><span style="font-size:10px;color:#6b7280;margin-left:auto;font-family:monospace">${m.lang || 'Missing'}</span></div>
+			<div class="px-4 py-2 flex items-center gap-2">${m.charset ? passIcon : failIcon}<span class="text-xs text-white">Charset</span><span style="font-size:10px;color:#6b7280;margin-left:auto;font-family:monospace">${m.charset || 'Missing'}</span></div>
+			<div class="px-4 py-2 flex items-center gap-2">${m.favicon ? passIcon : failIcon}<span class="text-xs text-white">Favicon</span><span style="font-size:10px;color:#6b7280;margin-left:auto">${m.favicon ? 'Found' : 'Missing'}</span></div>
+			<div class="px-4 py-2 flex items-center gap-2">${m.hasDoctype ? passIcon : failIcon}<span class="text-xs text-white">DOCTYPE</span><span style="font-size:10px;color:#6b7280;margin-left:auto">${m.hasDoctype ? 'Present' : 'Missing'}</span></div>
+			${m.robotsMeta ? '<div class="px-4 py-2 flex items-center gap-2"><svg style="width:14px;height:14px;color:#f97316;flex-shrink:0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01"/></svg><span class="text-xs text-white">Robots Meta</span><span style="font-size:10px;color:#f97316;margin-left:auto;font-family:monospace">' + escapeHtml(m.robotsMeta) + '</span></div>' : ''}
+		</div>
+	</div>`;
+
+	// ---- Headings Structure ----
+	if (data.content.headings && data.content.headings.length > 0) {
+		html += `<details open class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(245,158,11,0.2)">
+			<summary class="px-4 py-2.5 cursor-pointer" style="border-bottom:1px solid rgba(245,158,11,0.2);background:rgba(245,158,11,0.05)">
+				<span style="font-size:11px;font-weight:700;color:#fbbf24;text-transform:uppercase;letter-spacing:0.05em">Heading Structure (${data.content.headings.length})</span>
+			</summary>
+			<div class="divide-y divide-yellow-500/10 max-h-[300px] overflow-y-auto">`;
+		for (const h of data.content.headings.slice(0, 40)) {
+			const level = parseInt(h.tag[1]);
+			const indent = (level - 1) * 16;
+			const tagColor = level === 1 ? '#fbbf24' : level === 2 ? '#fb923c' : '#9ca3af';
+			html += `<div class="px-4 py-1.5 flex items-center gap-2">
+				<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;background:${tagColor}22;color:${tagColor};min-width:24px;text-align:center">${h.tag}</span>
+				<span style="font-size:11px;color:#d1d5db;margin-left:${indent}px">${escapeHtml(h.text.substring(0, 80))}</span>
+			</div>`;
+		}
+		html += `</div></details>`;
+	}
+
+	// ---- Content Analysis ----
+	html += `<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(245,158,11,0.2)">
+		<div class="px-4 py-2.5" style="border-bottom:1px solid rgba(245,158,11,0.2);background:rgba(245,158,11,0.05)">
+			<h4 style="font-size:11px;font-weight:700;color:#fbbf24;text-transform:uppercase;letter-spacing:0.05em">Content Analysis</h4>
+		</div>
+		<div class="grid grid-cols-2 md:grid-cols-4 gap-px" style="background:rgba(245,158,11,0.1)">
+			<div class="bg-cyber-card p-3 text-center">
+				<span style="font-size:20px;font-weight:900;color:${data.content.wordCount >= 300 ? '#10b981' : '#f97316'}">${data.content.wordCount}</span>
+				<span style="font-size:9px;color:#6b7280;display:block;text-transform:uppercase">Words</span>
+			</div>
+			<div class="bg-cyber-card p-3 text-center">
+				<span style="font-size:20px;font-weight:900;color:white">${data.content.imagesTotal}</span>
+				<span style="font-size:9px;color:#6b7280;display:block;text-transform:uppercase">Images</span>
+			</div>
+			<div class="bg-cyber-card p-3 text-center">
+				<span style="font-size:20px;font-weight:900;color:${data.content.imagesWithoutAlt === 0 ? '#10b981' : '#ef4444'}">${data.content.imagesWithoutAlt}</span>
+				<span style="font-size:9px;color:#6b7280;display:block;text-transform:uppercase">Imgs no alt</span>
+			</div>
+			<div class="bg-cyber-card p-3 text-center">
+				<span style="font-size:20px;font-weight:900;color:white">${data.content.headings.length}</span>
+				<span style="font-size:9px;color:#6b7280;display:block;text-transform:uppercase">Headings</span>
+			</div>
+		</div>
+	</div>`;
+
+	// ---- Keywords ----
+	if (data.topKeywords && data.topKeywords.length > 0) {
+		const maxCount = data.topKeywords[0].count;
+		html += `<details open class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(192,132,252,0.2)">
+			<summary class="px-4 py-2.5 cursor-pointer" style="border-bottom:1px solid rgba(192,132,252,0.2);background:rgba(192,132,252,0.05)">
+				<span style="font-size:11px;font-weight:700;color:#c084fc;text-transform:uppercase;letter-spacing:0.05em">Top Keywords (${data.topKeywords.length})</span>
+			</summary>
+			<div class="p-4">
+				<div class="flex flex-wrap gap-2 mb-3">`;
+		for (const kw of data.topKeywords.slice(0, 15)) {
+			const opacity = 0.3 + (kw.count / maxCount) * 0.7;
+			html += `<span style="font-size:11px;padding:3px 10px;border-radius:9999px;background:rgba(192,132,252,${(opacity * 0.2).toFixed(2)});color:#c084fc;border:1px solid rgba(192,132,252,${(opacity * 0.4).toFixed(2)});font-weight:${kw.count >= maxCount * 0.5 ? '700' : '500'}">${escapeHtml(kw.word)} <span style="font-size:9px;color:#9ca3af">${kw.count}x (${kw.density}%)</span></span>`;
+		}
+		html += `</div>`;
+		// Top 5 as table
+		html += `<div class="divide-y divide-purple-500/10">`;
+		for (const kw of data.topKeywords.slice(0, 8)) {
+			const barW = Math.max(3, (kw.count / maxCount) * 100);
+			html += `<div class="py-1 flex items-center gap-2">
+				<span style="font-size:11px;font-weight:600;color:#d1d5db;width:100px">${escapeHtml(kw.word)}</span>
+				<div style="flex:1;background:rgba(55,65,81,0.3);border-radius:9999px;height:6px;overflow:hidden"><div style="width:${barW}%;background:#c084fc;height:6px;border-radius:9999px;opacity:0.7"></div></div>
+				<span style="font-size:10px;font-family:monospace;color:#9ca3af;width:30px;text-align:right">${kw.count}</span>
+				<span style="font-size:9px;color:#6b7280;width:40px;text-align:right">${kw.density}%</span>
+			</div>`;
+		}
+		html += `</div></div></details>`;
+	}
+
+	// ---- Readability ----
+	if (data.readability) {
+		const r = data.readability;
+		const readColor = r.level === 'Easy' ? '#10b981' : r.level === 'Medium' ? '#eab308' : r.level === 'Hard' ? '#f97316' : '#ef4444';
+		html += `<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(245,158,11,0.2)">
+			<div class="px-4 py-2.5" style="border-bottom:1px solid rgba(245,158,11,0.2);background:rgba(245,158,11,0.05)">
+				<h4 style="font-size:11px;font-weight:700;color:#fbbf24;text-transform:uppercase;letter-spacing:0.05em">Readability</h4>
+			</div>
+			<div class="grid grid-cols-2 md:grid-cols-5 gap-px" style="background:rgba(245,158,11,0.1)">
+				<div class="bg-cyber-card p-3 text-center">
+					<span style="font-size:16px;font-weight:900;color:${readColor}">${r.level}</span>
+					<span style="font-size:9px;color:#6b7280;display:block;text-transform:uppercase">Level</span>
+				</div>
+				<div class="bg-cyber-card p-3 text-center">
+					<span style="font-size:16px;font-weight:900;color:white">${r.readabilityIndex}</span>
+					<span style="font-size:9px;color:#6b7280;display:block;text-transform:uppercase">ARI Score</span>
+				</div>
+				<div class="bg-cyber-card p-3 text-center">
+					<span style="font-size:16px;font-weight:900;color:white">${r.avgSentenceLength}</span>
+					<span style="font-size:9px;color:#6b7280;display:block;text-transform:uppercase">Words/Sentence</span>
+				</div>
+				<div class="bg-cyber-card p-3 text-center">
+					<span style="font-size:16px;font-weight:900;color:white">${r.avgWordLength}</span>
+					<span style="font-size:9px;color:#6b7280;display:block;text-transform:uppercase">Avg Word Len</span>
+				</div>
+				<div class="bg-cyber-card p-3 text-center">
+					<span style="font-size:16px;font-weight:900;color:white">${r.sentenceCount}</span>
+					<span style="font-size:9px;color:#6b7280;display:block;text-transform:uppercase">Sentences</span>
+				</div>
+			</div>
+		</div>`;
+	}
+
+	// ---- URL Analysis ----
+	if (data.urlAnalysis) {
+		const u = data.urlAnalysis;
+		html += `<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(192,132,252,0.2)">
+			<div class="px-4 py-2.5" style="border-bottom:1px solid rgba(192,132,252,0.2);background:rgba(192,132,252,0.05)">
+				<h4 style="font-size:11px;font-weight:700;color:#c084fc;text-transform:uppercase;letter-spacing:0.05em">URL Analysis</h4>
+			</div>
+			<div class="p-3">
+				<div style="font-size:11px;font-family:monospace;color:#22d3ee;padding:6px 10px;background:rgba(0,0,0,0.2);border-radius:6px;margin-bottom:10px;word-break:break-all">${escapeHtml(data.finalUrl)}</div>
+				<div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+					<div class="flex items-center gap-1.5">${u.length <= 100 ? passIcon : failIcon}<span style="font-size:10px;color:#d1d5db">Length: ${u.length}</span></div>
+					<div class="flex items-center gap-1.5">${!u.hasUppercase ? passIcon : failIcon}<span style="font-size:10px;color:#d1d5db">${u.hasUppercase ? 'Has uppercase' : 'Lowercase'}</span></div>
+					<div class="flex items-center gap-1.5">${!u.hasUnderscore ? passIcon : failIcon}<span style="font-size:10px;color:#d1d5db">${u.hasUnderscore ? 'Has underscores' : 'No underscores'}</span></div>
+					<div class="flex items-center gap-1.5">${!u.hasSpecialChars ? passIcon : failIcon}<span style="font-size:10px;color:#d1d5db">${u.hasSpecialChars ? 'Special chars' : 'Clean chars'}</span></div>
+					<div class="flex items-center gap-1.5"><span style="font-size:10px;color:#9ca3af">Depth: <span style="color:#d1d5db">${u.depth}</span></span></div>
+					<div class="flex items-center gap-1.5"><span style="font-size:10px;color:#9ca3af">${u.isClean ? '<span style="color:#10b981;font-weight:700">SEO-Friendly URL</span>' : '<span style="color:#f97316">Could be improved</span>'}</span></div>
+				</div>
+			</div>
+		</div>`;
+	}
+
+	// ---- Page Size & Performance ----
+	if (data.pageSize) {
+		const ps = data.pageSize;
+		const fmtKB = (b) => (b / 1024).toFixed(1) + ' KB';
+		html += `<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(249,115,22,0.2)">
+			<div class="px-4 py-2.5" style="border-bottom:1px solid rgba(249,115,22,0.2);background:rgba(249,115,22,0.05)">
+				<h4 style="font-size:11px;font-weight:700;color:#fb923c;text-transform:uppercase;letter-spacing:0.05em">Page Weight & Resources</h4>
+			</div>
+			<div class="grid grid-cols-2 md:grid-cols-4 gap-px" style="background:rgba(249,115,22,0.1)">
+				<div class="bg-cyber-card p-3 text-center">
+					<span style="font-size:16px;font-weight:900;color:${ps.htmlSize < 102400 ? '#10b981' : '#f97316'}">${fmtKB(ps.htmlSize)}</span>
+					<span style="font-size:9px;color:#6b7280;display:block;text-transform:uppercase">HTML Size</span>
+				</div>
+				<div class="bg-cyber-card p-3 text-center">
+					<span style="font-size:16px;font-weight:900;color:${ps.textToHtmlRatio >= 10 ? '#10b981' : '#f97316'}">${ps.textToHtmlRatio}%</span>
+					<span style="font-size:9px;color:#6b7280;display:block;text-transform:uppercase">Text/HTML Ratio</span>
+				</div>
+				<div class="bg-cyber-card p-3 text-center">
+					<span style="font-size:16px;font-weight:900;color:white">${data.content.externalCSS}</span>
+					<span style="font-size:9px;color:#6b7280;display:block;text-transform:uppercase">CSS Files</span>
+				</div>
+				<div class="bg-cyber-card p-3 text-center">
+					<span style="font-size:16px;font-weight:900;color:white">${data.content.externalJS}</span>
+					<span style="font-size:9px;color:#6b7280;display:block;text-transform:uppercase">JS Files</span>
+				</div>
+			</div>
+			<div class="px-4 py-2 grid grid-cols-2 gap-2">
+				<div style="font-size:10px;color:#9ca3af">Inline styles: <span style="color:#d1d5db;font-weight:600">${data.content.inlineStyles}</span></div>
+				<div style="font-size:10px;color:#9ca3af">Inline scripts: <span style="color:#d1d5db;font-weight:600">${data.content.inlineScripts}</span></div>
+				${data.resourceHints ? '<div style="font-size:10px;color:#9ca3af">Preconnect: <span style="color:#d1d5db;font-weight:600">' + data.resourceHints.preconnect.length + '</span></div>' : ''}
+				${data.resourceHints ? '<div style="font-size:10px;color:#9ca3af">Preload: <span style="color:#d1d5db;font-weight:600">' + data.resourceHints.preload.length + '</span></div>' : ''}
+			</div>
+		</div>`;
+	}
+
+	// ---- Redirect & Mixed Content ----
+	if (data.wasRedirected || (data.mixedContent && data.mixedContent.length > 0) || (data.deprecatedTags && data.deprecatedTags.length > 0)) {
+		html += `<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(239,68,68,0.2)">
+			<div class="px-4 py-2.5" style="border-bottom:1px solid rgba(239,68,68,0.2);background:rgba(239,68,68,0.05)">
+				<h4 style="font-size:11px;font-weight:700;color:#f87171;text-transform:uppercase;letter-spacing:0.05em">Issues & Warnings</h4>
+			</div>
+			<div class="divide-y divide-red-500/10">`;
+		if (data.wasRedirected) {
+			html += `<div class="px-4 py-2 flex items-center gap-2"><svg style="width:14px;height:14px;color:#f97316;flex-shrink:0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg><span style="font-size:11px;color:#fb923c">Redirect detected</span><span style="font-size:10px;font-family:monospace;color:#6b7280;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%">${escapeHtml(data.redirectTarget || '')}</span></div>`;
+		}
+		if (data.mixedContent && data.mixedContent.length > 0) {
+			html += `<div class="px-4 py-2 flex items-center gap-2">${failIcon}<span style="font-size:11px;color:#f87171">${data.mixedContent.length} mixed content resource(s) (HTTP on HTTPS)</span></div>`;
+		}
+		if (data.deprecatedTags && data.deprecatedTags.length > 0) {
+			html += `<div class="px-4 py-2 flex items-center gap-2">${failIcon}<span style="font-size:11px;color:#f87171">Deprecated HTML tags: <span style="font-family:monospace">${data.deprecatedTags.join(', ')}</span></span></div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// ---- Accessibility ----
+	if (data.accessibility) {
+		const a = data.accessibility;
+		html += `<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(56,189,248,0.2)">
+			<div class="px-4 py-2.5" style="border-bottom:1px solid rgba(56,189,248,0.2);background:rgba(56,189,248,0.05)">
+				<h4 style="font-size:11px;font-weight:700;color:#38bdf8;text-transform:uppercase;letter-spacing:0.05em">Accessibility</h4>
+			</div>
+			<div class="divide-y divide-sky-500/10">
+				<div class="px-4 py-2 flex items-center gap-2">${a.hasLang ? passIcon : failIcon}<span style="font-size:11px;color:#d1d5db">HTML lang attribute</span></div>
+				<div class="px-4 py-2 flex items-center gap-2">${a.hasSkipNav ? passIcon : failIcon}<span style="font-size:11px;color:#d1d5db">Skip navigation link</span></div>
+				<div class="px-4 py-2 flex items-center gap-2">${a.hasAriaLandmarks ? passIcon : failIcon}<span style="font-size:11px;color:#d1d5db">ARIA landmarks / semantic HTML5</span></div>
+				<div class="px-4 py-2 flex items-center gap-2">${a.formsHaveLabels ? passIcon : failIcon}<span style="font-size:11px;color:#d1d5db">Form labels</span></div>
+				<div class="px-4 py-2 flex items-center gap-2"><span style="font-size:11px;color:#9ca3af">ARIA attributes: <span style="color:#d1d5db;font-weight:600">${a.ariaAttributes}</span></span><span style="font-size:11px;color:#9ca3af;margin-left:16px">role attributes: <span style="color:#d1d5db;font-weight:600">${a.roleAttributes}</span></span></div>
+			</div>
+		</div>`;
+	}
+
+	// ---- HTTP Headers (SEO-relevant) ----
+	if (data.seoHeaders) {
+		html += `<details class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(139,92,246,0.2)">
+			<summary class="px-4 py-2.5 cursor-pointer" style="border-bottom:1px solid rgba(139,92,246,0.2);background:rgba(139,92,246,0.05)">
+				<span style="font-size:11px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:0.05em">HTTP Response Headers</span>
+			</summary>
+			<div class="divide-y divide-violet-500/10">`;
+		for (const [key, val] of Object.entries(data.seoHeaders)) {
+			if (val) {
+				html += `<div class="px-4 py-1.5 flex items-center gap-2">
+					<span style="font-size:10px;color:#a78bfa;font-weight:600;width:160px;flex-shrink:0">${escapeHtml(key)}</span>
+					<span style="font-size:10px;font-family:monospace;color:#9ca3af;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(String(val).substring(0, 100))}</span>
+				</div>`;
+			}
+		}
+		html += `</div></details>`;
+	}
+
+	// ---- Open Graph & Twitter Cards ----
+	const og = data.openGraph;
+	const tw = data.twitterCard;
+	const hasOG = og.title || og.description || og.image;
+	const hasTW = tw.card || tw.title;
+	html += `<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(236,72,153,0.2)">
+		<div class="px-4 py-2.5" style="border-bottom:1px solid rgba(236,72,153,0.2);background:rgba(236,72,153,0.05)">
+			<h4 style="font-size:11px;font-weight:700;color:#f472b6;text-transform:uppercase;letter-spacing:0.05em">Social Preview</h4>
+		</div>
+		<div class="p-4">
+			<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+				<!-- OG Preview -->
+				<div style="border:1px solid rgba(59,130,246,0.2);border-radius:8px;overflow:hidden;background:rgba(0,0,0,0.2)">
+					<div style="padding:8px 12px;border-bottom:1px solid rgba(59,130,246,0.1);background:rgba(59,130,246,0.05)">
+						<span style="font-size:10px;font-weight:700;color:#60a5fa;text-transform:uppercase">Open Graph</span>
+					</div>
+					${og.image ? '<img src="' + escapeHtml(og.image) + '" style="width:100%;max-height:120px;object-fit:cover" onerror="this.style.display=\'none\'" />' : ''}
+					<div style="padding:8px 12px">
+						<div style="font-size:12px;font-weight:700;color:white">${og.title ? escapeHtml(og.title) : '<span style="color:#6b7280">No og:title</span>'}</div>
+						<div style="font-size:10px;color:#9ca3af;margin-top:2px">${og.description ? escapeHtml(og.description.substring(0, 100)) : '<span style="color:#6b7280">No og:description</span>'}</div>
+						${og.siteName ? '<div style="font-size:9px;color:#6b7280;margin-top:4px">' + escapeHtml(og.siteName) + '</div>' : ''}
+					</div>
+				</div>
+				<!-- Twitter Preview -->
+				<div style="border:1px solid rgba(6,182,212,0.2);border-radius:8px;overflow:hidden;background:rgba(0,0,0,0.2)">
+					<div style="padding:8px 12px;border-bottom:1px solid rgba(6,182,212,0.1);background:rgba(6,182,212,0.05)">
+						<span style="font-size:10px;font-weight:700;color:#22d3ee;text-transform:uppercase">Twitter Card</span>
+						${tw.card ? '<span style="font-size:9px;color:#6b7280;margin-left:8px">(' + escapeHtml(tw.card) + ')</span>' : ''}
+					</div>
+					${tw.image ? '<img src="' + escapeHtml(tw.image) + '" style="width:100%;max-height:120px;object-fit:cover" onerror="this.style.display=\'none\'" />' : ''}
+					<div style="padding:8px 12px">
+						<div style="font-size:12px;font-weight:700;color:white">${tw.title ? escapeHtml(tw.title) : '<span style="color:#6b7280">No twitter:title</span>'}</div>
+						<div style="font-size:10px;color:#9ca3af;margin-top:2px">${tw.description ? escapeHtml(tw.description.substring(0, 100)) : '<span style="color:#6b7280">No twitter:description</span>'}</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>`;
+
+	// ---- Structured Data ----
+	html += `<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(139,92,246,0.2)">
+		<div class="px-4 py-2.5" style="border-bottom:1px solid rgba(139,92,246,0.2);background:rgba(139,92,246,0.05)">
+			<h4 style="font-size:11px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:0.05em">Structured Data (JSON-LD)</h4>
+		</div>`;
+	if (data.structuredData.length > 0) {
+		html += `<div class="divide-y divide-violet-500/10">`;
+		for (const sd of data.structuredData) {
+			html += `<div class="px-4 py-2 flex items-center gap-2">${passIcon}
+				<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;background:rgba(139,92,246,0.15);color:#a78bfa;border:1px solid rgba(139,92,246,0.3)">${escapeHtml(sd.type)}</span>
+				<span style="font-size:10px;color:#6b7280;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${escapeHtml(sd.summary.substring(0, 120))}</span>
+			</div>`;
+		}
+		html += `</div>`;
+	} else {
+		html += `<div class="px-4 py-3 flex items-center gap-2">${failIcon}<span style="font-size:11px;color:#9ca3af">No structured data (JSON-LD) found — consider adding Schema.org markup</span></div>`;
+	}
+	html += `</div>`;
+
+	// ---- Robots.txt ----
+	html += `<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(16,185,129,0.2)">
+		<div class="px-4 py-2.5" style="border-bottom:1px solid rgba(16,185,129,0.2);background:rgba(16,185,129,0.05)">
+			<h4 style="font-size:11px;font-weight:700;color:#34d399;text-transform:uppercase;letter-spacing:0.05em">Robots.txt</h4>
+		</div>`;
+	if (data.robots.exists) {
+		html += `<div class="p-4 space-y-2">
+			<div class="flex items-center gap-2">${passIcon}<span class="text-xs text-white font-semibold">robots.txt found</span></div>`;
+		if (data.robots.userAgents.length > 0) {
+			html += `<div style="font-size:10px;color:#9ca3af"><span style="color:#6b7280">User-Agents: </span>${data.robots.userAgents.map(u => '<span style="font-family:monospace;color:#d1d5db">' + escapeHtml(u) + '</span>').join(', ')}</div>`;
+		}
+		if (data.robots.disallowedPaths.length > 0) {
+			html += `<details><summary style="font-size:10px;color:#f97316;cursor:pointer">${data.robots.disallowedPaths.length} disallowed paths</summary><div style="padding:8px 0;font-size:10px;font-family:monospace;color:#9ca3af">${data.robots.disallowedPaths.map(p => escapeHtml(p)).join('<br>')}</div></details>`;
+		}
+		if (data.robots.sitemapUrls.length > 0) {
+			html += `<div style="font-size:10px;color:#9ca3af"><span style="color:#6b7280">Sitemaps in robots.txt: </span>${data.robots.sitemapUrls.map(u => '<span style="font-family:monospace;color:#22d3ee">' + escapeHtml(u) + '</span>').join('<br>')}</div>`;
+		}
+		if (data.robots.crawlDelay !== null) {
+			html += `<div style="font-size:10px;color:#f97316">Crawl-delay: ${data.robots.crawlDelay}s</div>`;
+		}
+		html += `</div>`;
+	} else {
+		html += `<div class="px-4 py-3 flex items-center gap-2">${failIcon}<span style="font-size:11px;color:#9ca3af">No robots.txt found</span></div>`;
+	}
+	html += `</div>`;
+
+	// ---- Sitemap ----
+	html += `<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(16,185,129,0.2)">
+		<div class="px-4 py-2.5" style="border-bottom:1px solid rgba(16,185,129,0.2);background:rgba(16,185,129,0.05)">
+			<h4 style="font-size:11px;font-weight:700;color:#34d399;text-transform:uppercase;letter-spacing:0.05em">Sitemap</h4>
+		</div>`;
+	if (data.sitemap.exists) {
+		html += `<div class="p-4 space-y-2">
+			<div class="flex items-center gap-2">${passIcon}<span class="text-xs text-white font-semibold">Sitemap found</span><span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3)">${escapeHtml(data.sitemap.format || 'XML')}</span></div>
+			<div style="font-size:11px;color:#9ca3af"><span style="font-weight:700;color:white">${data.sitemap.urls}</span> URLs indexed</div>`;
+		if (data.sitemap.lastmod) {
+			html += `<div style="font-size:10px;color:#6b7280">Last modified: <span style="color:#d1d5db">${escapeHtml(data.sitemap.lastmod)}</span></div>`;
+		}
+		if (data.sitemap.nestedSitemaps.length > 0) {
+			html += `<details><summary style="font-size:10px;color:#22d3ee;cursor:pointer">${data.sitemap.nestedSitemaps.length} nested sitemaps</summary><div style="padding:8px 0;font-size:9px;font-family:monospace;color:#6b7280;word-break:break-all">${data.sitemap.nestedSitemaps.map(u => escapeHtml(u)).join('<br>')}</div></details>`;
+		}
+		if (data.sitemap.sampleUrls.length > 0) {
+			html += `<details><summary style="font-size:10px;color:#9ca3af;cursor:pointer">Sample URLs (${data.sitemap.sampleUrls.length})</summary><div style="padding:8px 0;font-size:9px;font-family:monospace;color:#6b7280;word-break:break-all">${data.sitemap.sampleUrls.map(u => escapeHtml(u)).join('<br>')}</div></details>`;
+		}
+		html += `</div>`;
+	} else {
+		html += `<div class="px-4 py-3 flex items-center gap-2">${failIcon}<span style="font-size:11px;color:#9ca3af">No sitemap found — create a sitemap.xml for better search engine crawling</span></div>`;
+	}
+	html += `</div>`;
+
+	// ---- Links Analysis ----
+	html += `<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(6,182,212,0.2)">
+		<div class="px-4 py-2.5" style="border-bottom:1px solid rgba(6,182,212,0.2);background:rgba(6,182,212,0.05)">
+			<h4 style="font-size:11px;font-weight:700;color:#22d3ee;text-transform:uppercase;letter-spacing:0.05em">Links Analysis</h4>
+		</div>
+		<div class="grid grid-cols-3 md:grid-cols-6 gap-px" style="background:rgba(6,182,212,0.1)">
+			<div class="bg-cyber-card p-3 text-center">
+				<span style="font-size:18px;font-weight:900;color:white">${data.links.internalCount}</span>
+				<span style="font-size:8px;color:#6b7280;display:block;text-transform:uppercase">Internal</span>
+			</div>
+			<div class="bg-cyber-card p-3 text-center">
+				<span style="font-size:18px;font-weight:900;color:white">${data.links.externalCount}</span>
+				<span style="font-size:8px;color:#6b7280;display:block;text-transform:uppercase">External</span>
+			</div>
+			<div class="bg-cyber-card p-3 text-center">
+				<span style="font-size:18px;font-weight:900;color:${(data.links.nofollowInternal || 0) > 0 ? '#f97316' : '#10b981'}">${data.links.nofollowInternal || 0}</span>
+				<span style="font-size:8px;color:#6b7280;display:block;text-transform:uppercase">Nofollow Int.</span>
+			</div>
+			<div class="bg-cyber-card p-3 text-center">
+				<span style="font-size:18px;font-weight:900;color:white">${data.links.nofollowExternal || 0}</span>
+				<span style="font-size:8px;color:#6b7280;display:block;text-transform:uppercase">Nofollow Ext.</span>
+			</div>
+			<div class="bg-cyber-card p-3 text-center">
+				<span style="font-size:18px;font-weight:900;color:${(data.links.emptyLinks || 0) > 0 ? '#ef4444' : '#10b981'}">${data.links.emptyLinks || 0}</span>
+				<span style="font-size:8px;color:#6b7280;display:block;text-transform:uppercase">Empty Text</span>
+			</div>
+			<div class="bg-cyber-card p-3 text-center">
+				<span style="font-size:18px;font-weight:900;color:white">${data.links.internalCount + data.links.externalCount}</span>
+				<span style="font-size:8px;color:#6b7280;display:block;text-transform:uppercase">Total</span>
+			</div>
+		</div>`;
+	if (data.links.internalLinks.length > 0) {
+		html += `<details><summary class="px-4 py-2 cursor-pointer" style="font-size:10px;color:#22d3ee;background:rgba(6,182,212,0.03)">Internal links (${data.links.internalLinks.length})</summary>
+			<div class="divide-y divide-cyan-500/5 max-h-[200px] overflow-y-auto">`;
+		for (const l of data.links.internalLinks.slice(0, 30)) {
+			html += `<div class="px-4 py-1 flex items-center gap-2">
+				<span style="font-size:10px;font-family:monospace;color:#22d3ee;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(l.url)}</span>
+				<span style="font-size:9px;color:#6b7280;flex-shrink:0">${escapeHtml(l.text.substring(0, 40)) || '<em>empty</em>'}</span>
+				${l.nofollow ? '<span style="font-size:8px;color:#f97316;font-weight:700">nofollow</span>' : ''}
+			</div>`;
+		}
+		html += `</div></details>`;
+	}
+	if (data.links.externalLinks.length > 0) {
+		html += `<details><summary class="px-4 py-2 cursor-pointer" style="font-size:10px;color:#fb923c;background:rgba(249,115,22,0.03)">External links (${data.links.externalLinks.length})</summary>
+			<div class="divide-y divide-orange-500/5 max-h-[200px] overflow-y-auto">`;
+		for (const l of data.links.externalLinks.slice(0, 20)) {
+			html += `<div class="px-4 py-1 flex items-center gap-2">
+				<span style="font-size:10px;font-family:monospace;color:#fb923c;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(l.url)}</span>
+				${l.nofollow ? '<span style="font-size:8px;color:#f97316;font-weight:700">nofollow</span>' : ''}
+				${l.hasTarget ? '<span style="font-size:8px;color:#6b7280">_blank</span>' : ''}
+			</div>`;
+		}
+		html += `</div></details>`;
+	}
+	html += `</div>`;
+
+	// ---- Crawled Pages ----
+	if (data.crawledPages && data.crawledPages.length > 0) {
+		html += `<details open class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(132,204,22,0.2)">
+			<summary class="px-4 py-2.5 cursor-pointer" style="border-bottom:1px solid rgba(132,204,22,0.2);background:rgba(132,204,22,0.05)">
+				<span style="font-size:11px;font-weight:700;color:#a3e635;text-transform:uppercase;letter-spacing:0.05em">Page Analysis (${data.crawledPages.length} pages crawled)</span>
+			</summary>
+			<div class="divide-y divide-lime-500/10">`;
+		for (const page of data.crawledPages) {
+			const issueCount = page.issues.length;
+			const pageColor = issueCount === 0 ? '#10b981' : issueCount <= 2 ? '#f97316' : '#ef4444';
+			html += `<div class="px-4 py-2.5">
+				<div class="flex items-center gap-2 mb-1">
+					<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;background:${page.statusCode === 200 ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'};color:${page.statusCode === 200 ? '#10b981' : '#ef4444'}">${page.statusCode}</span>
+					<span style="font-size:11px;font-family:monospace;color:#d1d5db;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${escapeHtml(page.url)}</span>
+					<span style="font-size:9px;color:${pageColor};font-weight:700">${issueCount === 0 ? 'OK' : issueCount + ' issue' + (issueCount > 1 ? 's' : '')}</span>
+				</div>`;
+			if (page.title) html += `<div style="font-size:10px;color:#9ca3af">Title: <span style="color:#d1d5db">${escapeHtml(page.title.substring(0, 60))}</span></div>`;
+			if (page.h1) html += `<div style="font-size:10px;color:#9ca3af">H1: <span style="color:#d1d5db">${escapeHtml(page.h1.substring(0, 60))}</span></div>`;
+			html += `<div style="font-size:9px;color:#6b7280">${page.wordCount} words</div>`;
+			if (page.issues.length > 0) {
+				html += `<div class="flex flex-wrap gap-1 mt-1">`;
+				for (const iss of page.issues) {
+					html += `<span style="font-size:8px;font-weight:700;padding:1px 4px;border-radius:3px;background:rgba(239,68,68,0.15);color:#f87171;border:1px solid rgba(239,68,68,0.3)">${escapeHtml(iss)}</span>`;
+				}
+				html += `</div>`;
+			}
+			html += `</div>`;
+		}
+		html += `</div></details>`;
+	}
+
+	// ---- Hreflang ----
+	if (data.hreflangs && data.hreflangs.length > 0) {
+		html += `<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(20,184,166,0.2)">
+			<div class="px-4 py-2.5" style="border-bottom:1px solid rgba(20,184,166,0.2);background:rgba(20,184,166,0.05)">
+				<h4 style="font-size:11px;font-weight:700;color:#2dd4bf;text-transform:uppercase;letter-spacing:0.05em">Hreflang Tags (${data.hreflangs.length})</h4>
+			</div>
+			<div class="divide-y divide-teal-500/10">`;
+		for (const h of data.hreflangs) {
+			html += `<div class="px-4 py-1.5 flex items-center gap-2">
+				<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;background:rgba(20,184,166,0.15);color:#2dd4bf;border:1px solid rgba(20,184,166,0.3)">${escapeHtml(h.lang)}</span>
+				<span style="font-size:10px;font-family:monospace;color:#9ca3af;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${escapeHtml(h.url)}</span>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// ---- Social Links ----
+	if (data.socialLinks && data.socialLinks.length > 0) {
+		html += `<div class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(236,72,153,0.2)">
+			<div class="px-4 py-2.5" style="border-bottom:1px solid rgba(236,72,153,0.2);background:rgba(236,72,153,0.05)">
+				<h4 style="font-size:11px;font-weight:700;color:#f472b6;text-transform:uppercase;letter-spacing:0.05em">Social Media Links (${data.socialLinks.length})</h4>
+			</div>
+			<div class="p-3 flex flex-wrap gap-2">`;
+		for (const sl of data.socialLinks) {
+			html += `<span style="font-size:10px;padding:3px 8px;border-radius:6px;background:rgba(236,72,153,0.1);color:#f472b6;border:1px solid rgba(236,72,153,0.2)">${escapeHtml(sl.name)}</span>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// ---- Detailed Check Results ----
+	html += `<details open class="bg-cyber-card rounded-xl overflow-hidden mb-4" style="border:1px solid rgba(132,204,22,0.2)">
+		<summary class="px-4 py-2.5 cursor-pointer" style="border-bottom:1px solid rgba(132,204,22,0.2);background:rgba(132,204,22,0.05)">
+			<span style="font-size:11px;font-weight:700;color:#a3e635;text-transform:uppercase;letter-spacing:0.05em">All Checks (${data.checks.filter(c => c.pass).length}/${data.checks.length} passed)</span>
+		</summary>`;
+	if (data.checksByCategory) {
+		for (const [cat, arr] of Object.entries(data.checksByCategory)) {
+			const cc = catColors[cat] || '#9ca3af';
+			const catChecks = arr;
+			const passed = catChecks.filter(c => c.pass).length;
+			html += `<div style="border-bottom:1px solid rgba(132,204,22,0.08)">
+				<div class="px-4 py-2 flex items-center justify-between" style="background:rgba(0,0,0,0.15)">
+					<span style="font-size:10px;font-weight:700;color:${cc};text-transform:uppercase">${cat}</span>
+					<span style="font-size:10px;font-family:monospace;color:${passed === catChecks.length ? '#10b981' : '#f97316'}">${passed}/${catChecks.length}</span>
+				</div>
+				<div class="divide-y divide-gray-700/30">`;
+			for (const c of catChecks) {
+				html += `<div class="px-4 py-1.5 flex items-center gap-2">${c.pass ? passIcon : failIcon}<span style="font-size:11px;color:${c.pass ? '#d1d5db' : '#f87171'}">${escapeHtml(c.label)}</span><span style="font-size:9px;color:#6b7280;margin-left:auto;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right">${escapeHtml(c.detail.substring(0, 80))}</span></div>`;
+			}
+			html += `</div></div>`;
+		}
+	}
+	html += `</details>`;
+
+	// Footer
+	html += `<div class="text-center text-[10px] text-gray-600 mt-2">
+		Tested at ${new Date(data.timestamp).toLocaleString()}
+	</div>`;
+
+	html += `</div>`;
+	resultsDiv.innerHTML = html;
+}
+
+// =============================================
+// FEATURE: Speed Test
+// =============================================
+async function runSpeedTest() {
+	const urlInput = document.getElementById('url');
+	const url = normalizeUrl(urlInput.value);
+	if (!url) { showAlert('Please enter a target URL first.', 'Missing URL', 'warning'); return; }
+	if (url !== urlInput.value) urlInput.value = url;
+
+	const resultsDiv = document.getElementById('results');
+	resultsDiv.innerHTML = `<div class="flex items-center justify-center h-full py-16">
+		${cyberLoader({ size: 'lg', color: 'text-amber-400', text: 'Running Speed Test...', subtext: 'Fetching page & resources, analyzing performance... (max ~25s)' })}
+	</div>`;
+
+	try {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 30000);
+		const resp = await fetch(`/api/speedtest?url=${encodeURIComponent(url)}`, { signal: controller.signal });
+		clearTimeout(timeout);
+		const data = await resp.json();
+		if (!resp.ok) throw new Error(data.message || data.error || `HTTP ${resp.status}`);
+		displaySpeedTestResults(data);
+	} catch (e) {
+		const msg = e.name === 'AbortError' ? 'Request timed out.' : e.message;
+		resultsDiv.innerHTML = `<div class="text-center py-10"><p class="text-cyber-danger font-bold">Speed Test Failed</p><p class="text-gray-400 text-sm mt-2">${escapeHtml(msg)}</p><button onclick="runSpeedTest()" class="mt-4 px-4 py-2 bg-amber-500/20 border border-amber-500/50 text-amber-400 rounded-lg hover:bg-amber-500/30 transition-all text-sm">Retry</button></div>`;
+	}
+}
+
+function displaySpeedTestResults(data) {
+	lastSpeedTestData = data;
+	const resultsDiv = document.getElementById('results');
+
+	const fmtSize = (bytes) => {
+		if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+		if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+		return bytes + ' B';
+	};
+	const fmtMs = (ms) => ms !== null && ms !== undefined ? ms + 'ms' : 'N/A';
+	// Grade colors as hex for inline styles (html2canvas compatible)
+	const gradeHex = data.score >= 90 ? { text: '#34d399', border: 'rgba(16,185,129,0.3)', bg: 'rgba(16,185,129,0.1)' } :
+		data.score >= 80 ? { text: '#22d3ee', border: 'rgba(6,182,212,0.3)', bg: 'rgba(6,182,212,0.1)' } :
+		data.score >= 70 ? { text: '#facc15', border: 'rgba(234,179,8,0.3)', bg: 'rgba(234,179,8,0.1)' } :
+		data.score >= 50 ? { text: '#fb923c', border: 'rgba(249,115,22,0.3)', bg: 'rgba(249,115,22,0.1)' } :
+		{ text: '#f87171', border: 'rgba(239,68,68,0.3)', bg: 'rgba(239,68,68,0.1)' };
+	const barHex = (val, good, ok) => val <= good ? '#10b981' : val <= ok ? '#eab308' : '#ef4444';
+	const pctBar = (val, max, good, ok) => `<div style="width:100%;background:rgba(55,65,81,0.5);border-radius:9999px;height:6px;margin-top:4px"><div style="width:${Math.min(100, (val / max) * 100)}%;background:${barHex(val, good, ok)};height:6px;border-radius:9999px"></div></div>`;
+
+	let html = `<div class="p-4">
+		<!-- Header -->
+		<div class="flex items-center justify-between mb-4 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl">
+			<div class="flex items-center gap-3">
+				<div class="w-10 h-10 rounded-lg bg-amber-500/20 flex items-center justify-center">
+					<svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+				</div>
+				<div>
+					<h3 class="text-sm font-bold text-amber-400">Speed Test</h3>
+					<p class="text-xs text-gray-400"><span class="font-mono text-white">${escapeHtml(data.hostname)}</span> &mdash; ${fmtMs(data.timing.total)}</p>
+				</div>
+			</div>
+			<div class="flex items-center gap-1">
+				<button onclick="exportReconJSON('speed')" class="text-[10px] bg-cyber-elevated border border-amber-500/30 text-amber-400 px-2 py-0.5 rounded hover:bg-amber-500/20 transition-all font-medium">JSON</button>
+				<button onclick="exportReconHTML('speed')" class="text-[10px] bg-cyber-elevated border border-amber-500/30 text-amber-400 px-2 py-0.5 rounded hover:bg-amber-500/20 transition-all font-medium">HTML</button>
+				<button onclick="exportReconScreenshot(event)" class="text-[10px] bg-cyber-elevated border border-amber-500/30 text-amber-400 px-1.5 py-0.5 rounded hover:bg-amber-500/20 transition-all" title="Screenshot">
+					<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+				</button>
+			</div>
+		</div>
+
+		<!-- Score -->
+		<div class="bg-cyber-card border border-amber-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-3 flex items-center justify-between">
+				<div class="flex items-center gap-4">
+					<div style="width:64px;height:64px;border-radius:12px;border:2px solid ${gradeHex.border};background:${gradeHex.bg};display:flex;align-items:center;justify-content:center">
+						<span style="font-size:1.5rem;font-weight:900;color:${gradeHex.text}">${data.grade}</span>
+					</div>
+					<div>
+						<div class="text-sm text-white font-bold">Performance Score: <span style="color:${gradeHex.text}">${data.score}/100</span></div>
+						<div class="text-xs text-gray-500 mt-0.5">${data.penalties.length} issue${data.penalties.length !== 1 ? 's' : ''} detected</div>
+					</div>
+				</div>
+				<div class="text-right text-[10px] text-gray-500">
+					<div>Status: <span class="text-white font-mono">${data.statusCode}</span></div>
+					${data.redirected ? `<div class="text-yellow-400">Redirected</div>` : ''}
+				</div>
+			</div>
+			<!-- Score bar -->
+			<div class="px-4 pb-3">
+				<div style="width:100%;background:rgba(55,65,81,0.5);border-radius:9999px;height:10px">
+					<div style="width:${data.score}%;background:${data.score >= 90 ? '#10b981' : data.score >= 70 ? '#eab308' : data.score >= 50 ? '#f97316' : '#ef4444'};height:10px;border-radius:9999px;transition:width 0.5s"></div>
+				</div>
+			</div>
+		</div>
+
+	`;
+
+	// === Lighthouse-style Metrics (computed locally) ===
+	const lh = data.lighthouse;
+	if (lh) {
+		const scoreCircle = (label, val) => {
+			if (val === null || val === undefined) return '';
+			const color = val >= 90 ? '#10b981' : val >= 50 ? '#f97316' : '#ef4444';
+			const bgRing = 'rgba(75,85,99,0.3)';
+			// Use a conic-gradient CSS circle instead of SVG for html2canvas compatibility
+			const pct = Math.round(val);
+			return `<div style="text-align:center">
+				<div style="position:relative;width:56px;height:56px;margin:0 auto;border-radius:50%;background:conic-gradient(${color} ${pct * 3.6}deg, ${bgRing} ${pct * 3.6}deg);display:flex;align-items:center;justify-content:center">
+					<div style="width:44px;height:44px;border-radius:50%;background:#161b22;display:flex;align-items:center;justify-content:center">
+						<span style="font-size:15px;font-weight:800;color:${color};font-family:system-ui,sans-serif">${val}</span>
+					</div>
+				</div>
+				<span style="font-size:9px;color:#9ca3af;margin-top:4px;display:block">${label}</span>
+			</div>`;
+		};
+
+		html += `<div class="bg-cyber-card border border-indigo-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-indigo-500/20 bg-indigo-500/5 flex items-center gap-2">
+				<svg class="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+				<h4 class="text-xs font-bold text-indigo-400 uppercase tracking-wider">Lighthouse Scores (Estimated)</h4>
+				<span class="text-[9px] text-gray-600 ml-1">computed locally</span>
+			</div>
+			<div class="p-4 flex items-center justify-center gap-8 flex-wrap">
+				${scoreCircle('Performance', lh.scores?.performance)}
+				${scoreCircle('Accessibility', lh.scores?.accessibility)}
+				${scoreCircle('Best Practices', lh.scores?.['best-practices'])}
+				${scoreCircle('SEO', lh.scores?.seo)}
+			</div>`;
+
+		// Core Web Vitals
+		if (lh.webVitals) {
+			const wv = lh.webVitals;
+			const vitalCard = (label, metric) => {
+				if (!metric) return '';
+				const color = metric.score >= 0.9 ? '#10b981' : metric.score >= 0.5 ? '#f97316' : '#ef4444';
+				return '<div style="background:var(--cyber-card,#161b22);padding:12px;text-align:center">' +
+					'<span class="text-[10px] text-gray-500 uppercase" style="display:block">' + label + '</span>' +
+					'<span style="font-size:16px;font-weight:700;font-family:monospace;color:' + color + '">' + escapeHtml(metric.value) + '</span>' +
+				'</div>';
+			};
+			html += `<div class="grid grid-cols-3 md:grid-cols-6 gap-px bg-indigo-500/10 border-t border-indigo-500/10">
+				${vitalCard('FCP', wv.fcp)}
+				${vitalCard('LCP', wv.lcp)}
+				${vitalCard('TBT', wv.tbt)}
+				${vitalCard('CLS', wv.cls)}
+				${vitalCard('Speed Index', wv.si)}
+				${vitalCard('TTI', wv.tti)}
+			</div>`;
+		}
+
+		// Detailed checks (expandable)
+		const renderChecks = (title, checks, color) => {
+			if (!checks || checks.length === 0) return '';
+			const passed = checks.filter(c => c.pass).length;
+			let h = `<details class="border-t border-indigo-500/10">
+				<summary class="px-4 py-2 bg-indigo-500/5 cursor-pointer flex items-center justify-between">
+					<span class="text-[10px] text-indigo-400 uppercase font-bold">${title}</span>
+					<span class="text-[10px] font-mono" style="color:${color}">${passed}/${checks.length}</span>
+				</summary>
+				<div class="divide-y divide-indigo-500/5">`;
+			for (const c of checks) {
+				const icon = c.pass
+					? '<svg style="width:14px;height:14px;color:#10b981;flex-shrink:0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>'
+					: '<svg style="width:14px;height:14px;color:#ef4444;flex-shrink:0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>';
+				h += `<div class="px-4 py-1.5 flex items-center gap-2">${icon}<span class="text-[11px] text-gray-400">${escapeHtml(c.label)}</span></div>`;
+			}
+			h += `</div></details>`;
+			return h;
+		};
+		const accColor = lh.scores.accessibility >= 90 ? '#10b981' : lh.scores.accessibility >= 50 ? '#f97316' : '#ef4444';
+		const bpColor = lh.scores['best-practices'] >= 90 ? '#10b981' : lh.scores['best-practices'] >= 50 ? '#f97316' : '#ef4444';
+		const seoColor = lh.scores.seo >= 90 ? '#10b981' : lh.scores.seo >= 50 ? '#f97316' : '#ef4444';
+		html += renderChecks('Accessibility Checks', lh.accessibilityChecks, accColor);
+		html += renderChecks('Best Practices Checks', lh.bestPracticesChecks, bpColor);
+		html += renderChecks('SEO Checks', lh.seoChecks, seoColor);
+
+		html += `</div>`;
+	}
+
+	html += `
+		<!-- Timing Breakdown -->
+		<div class="bg-cyber-card border border-amber-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-amber-500/20 bg-amber-500/5">
+				<h4 class="text-xs font-bold text-amber-400 uppercase tracking-wider">Timing Breakdown</h4>
+			</div>
+			<div class="grid grid-cols-2 md:grid-cols-4 gap-px bg-amber-500/10">
+				<div class="bg-cyber-card p-3">
+					<span class="text-[10px] text-gray-500 uppercase block">DNS Lookup</span>
+					<span class="text-lg font-mono font-bold" style="color:${barHex(data.timing.dns, 50, 200)}">${fmtMs(data.timing.dns)}</span>
+					${pctBar(data.timing.dns, 500, 50, 200)}
+				</div>
+				<div class="bg-cyber-card p-3">
+					<span class="text-[10px] text-gray-500 uppercase block">TTFB</span>
+					<span class="text-lg font-mono font-bold" style="color:${barHex(data.timing.ttfb, 200, 600)}">${fmtMs(data.timing.ttfb)}</span>
+					${pctBar(data.timing.ttfb, 2000, 200, 600)}
+				</div>
+				<div class="bg-cyber-card p-3">
+					<span class="text-[10px] text-gray-500 uppercase block">Download</span>
+					<span class="text-lg font-mono font-bold" style="color:${barHex(data.timing.download, 200, 500)}">${fmtMs(data.timing.download)}</span>
+					${pctBar(data.timing.download, 2000, 200, 500)}
+				</div>
+				<div class="bg-cyber-card p-3">
+					<span class="text-[10px] text-gray-500 uppercase block">Total</span>
+					<span class="text-lg font-mono font-bold text-white">${fmtMs(data.timing.total)}</span>
+					${pctBar(data.timing.total, 5000, 500, 2000)}
+				</div>
+			</div>
+		</div>
+
+		<!-- Size Breakdown -->
+		<div class="bg-cyber-card border border-amber-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-amber-500/20 bg-amber-500/5">
+				<h4 class="text-xs font-bold text-amber-400 uppercase tracking-wider">Size Breakdown</h4>
+			</div>
+			<div class="p-4">
+				<div class="flex items-center justify-between mb-3">
+					<span class="text-sm text-white font-bold">Total Page Weight</span>
+					<span class="text-sm font-mono font-bold ${data.sizes.total > 3000000 ? 'text-red-400' : data.sizes.total > 1500000 ? 'text-yellow-400' : 'text-emerald-400'}">${fmtSize(data.sizes.total)}</span>
+				</div>`;
+
+	// Size bars
+	const sizeItems = [
+		{ label: 'HTML', size: data.sizes.html, hex: '#3b82f6' },
+		{ label: 'JavaScript', size: data.sizes.js, hex: '#eab308' },
+		{ label: 'CSS', size: data.sizes.css, hex: '#a855f7' },
+		{ label: 'Images', size: data.sizes.images, hex: '#22c55e' },
+		{ label: 'Fonts', size: data.sizes.fonts, hex: '#ec4899' },
+	].filter(s => s.size > 0);
+
+	for (const item of sizeItems) {
+		const pct = Math.max(1, (item.size / data.sizes.total) * 100);
+		html += `<div class="flex items-center gap-3 mb-2">
+			<span class="text-[10px] text-gray-400 w-16">${item.label}</span>
+			<div style="flex:1;background:rgba(55,65,81,0.3);border-radius:9999px;height:12px;overflow:hidden">
+				<div style="width:${pct.toFixed(1)}%;background:${item.hex};height:12px;border-radius:9999px;opacity:0.8"></div>
+			</div>
+			<span class="text-[10px] font-mono text-gray-300 w-16 text-right">${fmtSize(item.size)}</span>
+		</div>`;
+	}
+	html += `</div></div>`;
+
+	// Resource Counts
+	html += `<div class="bg-cyber-card border border-amber-500/20 rounded-xl overflow-hidden mb-4">
+		<div class="px-4 py-2.5 border-b border-amber-500/20 bg-amber-500/5">
+			<h4 class="text-xs font-bold text-amber-400 uppercase tracking-wider">Resource Counts</h4>
+		</div>
+		<div class="grid grid-cols-2 md:grid-cols-4 gap-px bg-amber-500/10">
+			<div class="bg-cyber-card p-3 text-center">
+				<span class="text-2xl font-black text-white">${data.counts.cssFiles}</span>
+				<span class="text-[10px] text-gray-500 block uppercase">CSS Files</span>
+			</div>
+			<div class="bg-cyber-card p-3 text-center">
+				<span class="text-2xl font-black text-white">${data.counts.jsFiles}</span>
+				<span class="text-[10px] text-gray-500 block uppercase">JS Files</span>
+			</div>
+			<div class="bg-cyber-card p-3 text-center">
+				<span class="text-2xl font-black text-white">${data.counts.images}</span>
+				<span class="text-[10px] text-gray-500 block uppercase">Images</span>
+			</div>
+			<div class="bg-cyber-card p-3 text-center">
+				<span class="text-2xl font-black text-white">${data.counts.fonts}</span>
+				<span class="text-[10px] text-gray-500 block uppercase">Fonts</span>
+			</div>
+		</div>
+	</div>`;
+
+	// Performance Indicators
+	const perf = data.performance;
+	const checkIcon = (ok) => ok
+		? '<svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>'
+		: '<svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>';
+
+	html += `<div class="bg-cyber-card border border-amber-500/20 rounded-xl overflow-hidden mb-4">
+		<div class="px-4 py-2.5 border-b border-amber-500/20 bg-amber-500/5">
+			<h4 class="text-xs font-bold text-amber-400 uppercase tracking-wider">Performance Indicators</h4>
+		</div>
+		<div class="grid grid-cols-2 gap-px bg-amber-500/10">
+			<div class="bg-cyber-card p-3 flex items-center gap-2">${checkIcon(perf.compressed)}<span class="text-xs text-gray-300">Compression ${perf.compressionType ? '(' + escapeHtml(perf.compressionType) + ')' : ''}</span></div>
+			<div class="bg-cyber-card p-3 flex items-center gap-2">${checkIcon(!!perf.cacheControl)}<span class="text-xs text-gray-300">Cache Headers</span></div>
+			<div class="bg-cyber-card p-3 flex items-center gap-2">${checkIcon(perf.etag || perf.lastModified)}<span class="text-xs text-gray-300">Validation (ETag/Last-Modified)</span></div>
+			<div class="bg-cyber-card p-3 flex items-center gap-2">${checkIcon(perf.http2)}<span class="text-xs text-gray-300">HTTP/2 or HTTP/3</span></div>
+			<div class="bg-cyber-card p-3 flex items-center gap-2">${checkIcon(perf.renderBlockingScripts === 0)}<span class="text-xs text-gray-300">No render-blocking scripts ${perf.renderBlockingScripts > 0 ? '<span class="text-red-400 font-mono">(' + perf.renderBlockingScripts + ' blocking)</span>' : ''}</span></div>
+			<div class="bg-cyber-card p-3 flex items-center gap-2">${checkIcon(perf.lazyImages > 0 || perf.totalImages <= 3)}<span class="text-xs text-gray-300">Lazy loading ${perf.lazyImages > 0 ? '<span class="text-emerald-400 font-mono">(' + perf.lazyImages + '/' + perf.totalImages + ')</span>' : ''}</span></div>
+			<div class="bg-cyber-card p-3 flex items-center gap-2">${checkIcon(perf.modernImages > 0)}<span class="text-xs text-gray-300">Modern images (WebP/AVIF) ${perf.modernImages > 0 ? '<span class="text-emerald-400 font-mono">(' + perf.modernImages + ')</span>' : ''}</span></div>
+			<div class="bg-cyber-card p-3 flex items-center gap-2">${checkIcon(perf.hasCriticalCss)}<span class="text-xs text-gray-300">Critical CSS</span></div>
+			<div class="bg-cyber-card p-3 flex items-center gap-2">${checkIcon(perf.preloadHints > 0)}<span class="text-xs text-gray-300">Resource Hints ${perf.preloadHints > 0 ? '<span class="text-emerald-400 font-mono">(' + perf.preloadHints + ')</span>' : ''}</span></div>
+			<div class="bg-cyber-card p-3 flex items-center gap-2">${checkIcon(perf.asyncScripts > 0 || perf.deferScripts > 0)}<span class="text-xs text-gray-300">Async/Defer Scripts <span class="font-mono text-gray-500">(${perf.asyncScripts}a/${perf.deferScripts}d)</span></span></div>
+		</div>
+	</div>`;
+
+	// Penalties (issues detected)
+	if (data.penalties.length > 0) {
+		html += `<div class="bg-cyber-card border border-red-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-red-500/20 bg-red-500/5">
+				<h4 class="text-xs font-bold text-red-400 uppercase tracking-wider">Issues Detected (−${100 - data.score} points)</h4>
+			</div>
+			<div class="divide-y divide-red-500/10">`;
+		for (const p of data.penalties) {
+			html += `<div class="px-4 py-2.5 flex items-center gap-3">
+				<span style="font-size:10px;font-family:monospace;font-weight:700;color:#f87171;background:rgba(239,68,68,0.1);padding:2px 6px;border-radius:4px;white-space:nowrap">−${p.points}</span>
+				<div>
+					<span class="text-xs text-white font-semibold">${escapeHtml(p.rule)}</span>
+					<span class="text-[11px] text-gray-500 ml-2">${escapeHtml(p.detail)}</span>
+				</div>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// Advice section
+	if (data.advice.length > 0) {
+		const priorityStyles = {
+			critical: { bg: 'rgba(239,68,68,0.2)', color: '#f87171', border: 'rgba(239,68,68,0.3)', label: 'CRITICAL' },
+			important: { bg: 'rgba(234,179,8,0.2)', color: '#facc15', border: 'rgba(234,179,8,0.3)', label: 'IMPORTANT' },
+			suggestion: { bg: 'rgba(6,182,212,0.2)', color: '#22d3ee', border: 'rgba(6,182,212,0.3)', label: 'TIP' },
+		};
+		html += `<div class="bg-cyber-card border border-emerald-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-emerald-500/20 bg-emerald-500/5">
+				<h4 class="text-xs font-bold text-emerald-400 uppercase tracking-wider">Optimization Advice (${data.advice.length})</h4>
+			</div>
+			<div class="divide-y divide-emerald-500/10">`;
+		for (const a of data.advice) {
+			const s = priorityStyles[a.priority] || priorityStyles.suggestion;
+			html += `<div class="px-4 py-3">
+				<div class="flex items-start gap-2">
+					<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;border:1px solid ${s.border};background:${s.bg};color:${s.color};white-space:nowrap;margin-top:2px">${s.label}</span>
+					<div>
+						<div class="text-xs text-white font-semibold">${escapeHtml(a.title)}</div>
+						<div class="text-[11px] text-gray-400 mt-1 leading-relaxed">${escapeHtml(a.description)}</div>
+					</div>
+				</div>
+			</div>`;
+		}
+		html += `</div></div>`;
+	}
+
+	// Resources waterfall (top 15 slowest)
+	if (data.resources && data.resources.length > 0) {
+		const sorted = [...data.resources].sort((a, b) => b.time - a.time);
+		const maxTime = Math.max(...sorted.map(r => r.time), 1);
+		html += `<details open class="bg-cyber-card border border-amber-500/20 rounded-xl overflow-hidden mb-4">
+			<summary class="px-4 py-2.5 border-b border-amber-500/20 bg-amber-500/5 cursor-pointer">
+				<span class="text-xs font-bold text-amber-400 uppercase tracking-wider">Resource Waterfall (${data.resources.length} resources)</span>
+			</summary>
+			<div class="divide-y divide-amber-500/10">`;
+		const typeColors = { css: { hex: '#a855f7', bg: 'rgba(168,85,247,0.13)' }, js: { hex: '#eab308', bg: 'rgba(234,179,8,0.13)' }, image: { hex: '#22c55e', bg: 'rgba(34,197,94,0.13)' }, font: { hex: '#ec4899', bg: 'rgba(236,72,153,0.13)' } };
+		for (const r of sorted.slice(0, 20)) {
+			const barW = Math.max(2, (r.time / maxTime) * 100);
+			const tc = typeColors[r.type] || { hex: '#6b7280', bg: 'rgba(107,114,128,0.13)' };
+			const shortUrl = r.url.split('/').pop()?.split('?')[0] || r.url;
+			html += `<div class="px-4 py-1.5 flex items-center gap-2">
+				<span style="font-size:9px;font-weight:700;text-transform:uppercase;padding:2px 4px;border-radius:4px;background:${tc.bg};color:${tc.hex};width:40px;text-align:center;display:inline-block">${r.type}</span>
+				<span style="font-size:10px;color:#9ca3af;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0" title="${escapeHtml(r.url)}">${escapeHtml(shortUrl.length > 50 ? shortUrl.substring(0, 47) + '...' : shortUrl)}</span>
+				<div style="width:96px;background:rgba(55,65,81,0.3);border-radius:9999px;height:6px;flex-shrink:0">
+					<div style="width:${barW}%;background:${tc.hex};height:6px;border-radius:9999px;opacity:0.8"></div>
+				</div>
+				<span style="font-size:10px;font-family:monospace;color:#6b7280;width:48px;text-align:right">${fmtMs(r.time)}</span>
+				<span style="font-size:10px;font-family:monospace;color:#4b5563;width:56px;text-align:right">${fmtSize(r.size)}</span>
+				${r.compressed ? '<span style="font-size:8px;color:#10b981">gz</span>' : '<span style="font-size:8px;color:rgba(239,68,68,0.5)">raw</span>'}
+			</div>`;
+		}
+		html += `</div></details>`;
+	}
+
+	// Server info
+	html += `<div class="text-center text-[10px] text-gray-600 mt-2">
+		${perf.server ? 'Server: <span class="font-mono text-gray-500">' + escapeHtml(perf.server) + '</span> · ' : ''}
+		Tested at ${new Date(data.timestamp).toLocaleString()}
+	</div>`;
+
+	html += `</div>`;
+	resultsDiv.innerHTML = html;
+}
+
+// =============================================
 // FEATURE: Full Reconnaissance
 // =============================================
 async function runFullRecon() {
@@ -5565,28 +6568,30 @@ async function runFullRecon() {
 function displayFullReconResults(data) {
 	lastFullReconData = data;
 	const resultsDiv = document.getElementById('results');
+	// Inline style colors for category badges (html2canvas compatible)
 	const catColors = {
-		'CMS': 'bg-pink-500/15 text-pink-400 border-pink-500/30',
-		'CMS/E-commerce': 'bg-pink-500/15 text-pink-400 border-pink-500/30',
-		'Framework': 'bg-blue-500/15 text-blue-400 border-blue-500/30',
-		'Frontend': 'bg-violet-500/15 text-violet-400 border-violet-500/30',
-		'Language': 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
-		'Web Server': 'bg-orange-500/15 text-orange-400 border-orange-500/30',
-		'CDN/WAF': 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
-		'CDN': 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
-		'Cache': 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
-		'Platform': 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30',
-		'Analytics': 'bg-green-500/15 text-green-400 border-green-500/30',
-		'Security': 'bg-red-500/15 text-red-400 border-red-500/30',
-		'Generator': 'bg-gray-500/15 text-gray-400 border-gray-500/30',
-		'Website Builder': 'bg-teal-500/15 text-teal-400 border-teal-500/30',
-		'JS Library': 'bg-amber-500/15 text-amber-400 border-amber-500/30',
-		'E-commerce': 'bg-pink-500/15 text-pink-400 border-pink-500/30',
-		'SEO': 'bg-lime-500/15 text-lime-400 border-lime-500/30',
-		'Font': 'bg-slate-500/15 text-slate-400 border-slate-500/30',
-		'Chat': 'bg-sky-500/15 text-sky-400 border-sky-500/30',
-		'Marketing': 'bg-fuchsia-500/15 text-fuchsia-400 border-fuchsia-500/30',
+		'CMS':            { bg: 'rgba(236,72,153,0.15)', color: '#f472b6', border: 'rgba(236,72,153,0.3)' },
+		'CMS/E-commerce': { bg: 'rgba(236,72,153,0.15)', color: '#f472b6', border: 'rgba(236,72,153,0.3)' },
+		'Framework':      { bg: 'rgba(59,130,246,0.15)', color: '#60a5fa', border: 'rgba(59,130,246,0.3)' },
+		'Frontend':       { bg: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: 'rgba(139,92,246,0.3)' },
+		'Language':       { bg: 'rgba(234,179,8,0.15)', color: '#facc15', border: 'rgba(234,179,8,0.3)' },
+		'Web Server':     { bg: 'rgba(249,115,22,0.15)', color: '#fb923c', border: 'rgba(249,115,22,0.3)' },
+		'CDN/WAF':        { bg: 'rgba(6,182,212,0.15)', color: '#22d3ee', border: 'rgba(6,182,212,0.3)' },
+		'CDN':            { bg: 'rgba(6,182,212,0.15)', color: '#22d3ee', border: 'rgba(6,182,212,0.3)' },
+		'Cache':          { bg: 'rgba(6,182,212,0.15)', color: '#22d3ee', border: 'rgba(6,182,212,0.3)' },
+		'Platform':       { bg: 'rgba(99,102,241,0.15)', color: '#818cf8', border: 'rgba(99,102,241,0.3)' },
+		'Analytics':      { bg: 'rgba(34,197,94,0.15)', color: '#4ade80', border: 'rgba(34,197,94,0.3)' },
+		'Security':       { bg: 'rgba(239,68,68,0.15)', color: '#f87171', border: 'rgba(239,68,68,0.3)' },
+		'Generator':      { bg: 'rgba(107,114,128,0.15)', color: '#9ca3af', border: 'rgba(107,114,128,0.3)' },
+		'Website Builder': { bg: 'rgba(20,184,166,0.15)', color: '#2dd4bf', border: 'rgba(20,184,166,0.3)' },
+		'JS Library':     { bg: 'rgba(245,158,11,0.15)', color: '#fbbf24', border: 'rgba(245,158,11,0.3)' },
+		'E-commerce':     { bg: 'rgba(236,72,153,0.15)', color: '#f472b6', border: 'rgba(236,72,153,0.3)' },
+		'SEO':            { bg: 'rgba(132,204,22,0.15)', color: '#a3e635', border: 'rgba(132,204,22,0.3)' },
+		'Font':           { bg: 'rgba(100,116,139,0.15)', color: '#94a3b8', border: 'rgba(100,116,139,0.3)' },
+		'Chat':           { bg: 'rgba(14,165,233,0.15)', color: '#38bdf8', border: 'rgba(14,165,233,0.3)' },
+		'Marketing':      { bg: 'rgba(192,38,211,0.15)', color: '#e879f9', border: 'rgba(192,38,211,0.3)' },
 	};
+	const defaultCatColor = { bg: 'rgba(107,114,128,0.15)', color: '#9ca3af', border: 'rgba(107,114,128,0.3)' };
 
 	// CMS logos: use real logos from Simple Icons CDN
 	const cmsLogos = {
@@ -5959,9 +6964,9 @@ function displayFullReconResults(data) {
 			</div>
 			<div class="p-3 space-y-2">`;
 		for (const tech of data.technologies) {
-			const cc = catColors[tech.category] || 'bg-gray-500/15 text-gray-400 border-gray-500/30';
+			const cc = catColors[tech.category] || defaultCatColor;
 			html += `<div class="flex items-center gap-3 px-3 py-2.5 bg-cyber-elevated/50 rounded-lg">
-				<span class="px-2 py-0.5 text-[9px] font-bold uppercase rounded border ${cc} whitespace-nowrap">${escapeHtml(tech.category)}</span>
+				<span style="padding:2px 8px;font-size:9px;font-weight:700;text-transform:uppercase;border-radius:4px;border:1px solid ${cc.border};background:${cc.bg};color:${cc.color};white-space:nowrap">${escapeHtml(tech.category)}</span>
 				<span class="text-sm font-bold text-white">${escapeHtml(tech.name)}</span>
 				<span class="text-[10px] text-gray-500 ml-auto hidden md:block">${escapeHtml(tech.evidence)}</span>
 			</div>`;
