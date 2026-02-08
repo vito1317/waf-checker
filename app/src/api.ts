@@ -1876,13 +1876,70 @@ async function handleDNSRecon(request: Request): Promise<Response> {
 				if (aRecords.length === 0) return [];
 				return reverseIPLookup(aRecords[0].data);
 			})(),
-			// Domain WHOIS via RDAP
+			// Domain WHOIS via RDAP — direct registry servers
 			(async () => {
 				try {
-					const rdapResp = await fetchWithTimeout(`https://rdap.org/domain/${encodeURIComponent(rootDomain)}`, {
-						headers: { 'Accept': 'application/rdap+json, application/json', 'User-Agent': 'Mozilla/5.0 (compatible; WAF-Checker/1.0)' },
-					}, 5000);
-					if (!rdapResp.ok) return null;
+					const tld = rootDomain.split('.').pop()?.toLowerCase() || '';
+					const rdapServers: Record<string, string> = {
+						'com': 'https://rdap.verisign.com/com/v1/domain/',
+						'net': 'https://rdap.verisign.com/net/v1/domain/',
+						'org': 'https://rdap.publicinterestregistry.org/rdap/domain/',
+						'fr': 'https://rdap.nic.fr/domain/',
+						'de': 'https://rdap.denic.de/domain/',
+						'uk': 'https://rdap.nominet.uk/uk/domain/',
+						'io': 'https://rdap.nic.io/domain/',
+						'dev': 'https://rdap.nic.google/domain/',
+						'app': 'https://rdap.nic.google/domain/',
+						'eu': 'https://rdap.eu/domain/',
+						'nl': 'https://rdap.sidn.nl/domain/',
+						'be': 'https://rdap.dns.be/domain/',
+						'ch': 'https://rdap.nic.ch/domain/',
+						'it': 'https://rdap.nic.it/domain/',
+						'es': 'https://rdap.nic.es/domain/',
+						'pl': 'https://rdap.dns.pl/domain/',
+						'se': 'https://rdap.iis.se/domain/',
+						'br': 'https://rdap.registro.br/domain/',
+						'au': 'https://rdap.auda.org.au/domain/',
+						'jp': 'https://rdap.jprs.jp/domain/',
+						'ru': 'https://rdap.tcinet.ru/domain/',
+						'co': 'https://rdap.nic.co/domain/',
+						'cc': 'https://rdap.verisign.com/cc/v1/domain/',
+						'tv': 'https://rdap.verisign.com/tv/v1/domain/',
+						'me': 'https://rdap.nic.me/domain/',
+						'info': 'https://rdap.afilias.net/rdap/info/domain/',
+						'xyz': 'https://rdap.nic.xyz/domain/',
+					};
+					let rdapResp: Response | null = null;
+					const directUrl = rdapServers[tld];
+					if (directUrl) {
+						try {
+							rdapResp = await fetchWithTimeout(`${directUrl}${encodeURIComponent(rootDomain)}`, {
+								headers: { 'Accept': 'application/rdap+json, application/json' },
+							}, 8000);
+							if (!rdapResp.ok) rdapResp = null;
+						} catch { rdapResp = null; }
+					}
+					if (!rdapResp) {
+						try {
+							const bootstrapResp = await fetchWithTimeout('https://data.iana.org/rdap/dns.json', {}, 5000);
+							if (bootstrapResp.ok) {
+								const bootstrap: any = await bootstrapResp.json();
+								for (const entry of (bootstrap.services || [])) {
+									const tlds: string[] = entry[0] || [];
+									const urls: string[] = entry[1] || [];
+									if (tlds.includes(tld) && urls.length > 0) {
+										const baseUrl = urls[0].endsWith('/') ? urls[0] : urls[0] + '/';
+										rdapResp = await fetchWithTimeout(`${baseUrl}domain/${encodeURIComponent(rootDomain)}`, {
+											headers: { 'Accept': 'application/rdap+json, application/json' },
+										}, 8000);
+										if (!rdapResp.ok) rdapResp = null;
+										break;
+									}
+								}
+							}
+						} catch { /* ignore */ }
+					}
+					if (!rdapResp || !rdapResp.ok) return null;
 					const rdap: any = await rdapResp.json();
 
 					// Helper: extract contact info from an entity's vcardArray
@@ -2892,13 +2949,100 @@ async function handleFullRecon(request: Request): Promise<Response> {
 				if (aRecords.length === 0) return [];
 				return reverseIPLookup(aRecords[0].data);
 			})(),
-			// Phase 7: Domain WHOIS via RDAP (same logic as handleDNSRecon)
+			// Phase 7: Domain WHOIS via RDAP — direct registry servers (no third-party redirect)
 			(async () => {
 				try {
-					const rdapResp = await fetchWithTimeout(`https://rdap.org/domain/${encodeURIComponent(reconRootDomain)}`, {
-						headers: { 'Accept': 'application/rdap+json, application/json', 'User-Agent': 'Mozilla/5.0 (compatible; WAF-Checker/1.0)' },
-					}, 5000);
-					if (!rdapResp.ok) return null;
+					const tld = reconRootDomain.split('.').pop()?.toLowerCase() || '';
+					// Direct RDAP servers per TLD (official registry endpoints)
+					const rdapServers: Record<string, string> = {
+						'com': 'https://rdap.verisign.com/com/v1/domain/',
+						'net': 'https://rdap.verisign.com/net/v1/domain/',
+						'org': 'https://rdap.publicinterestregistry.org/rdap/domain/',
+						'fr': 'https://rdap.nic.fr/domain/',
+						'de': 'https://rdap.denic.de/domain/',
+						'uk': 'https://rdap.nominet.uk/uk/domain/',
+						'co.uk': 'https://rdap.nominet.uk/uk/domain/',
+						'io': 'https://rdap.nic.io/domain/',
+						'dev': 'https://rdap.nic.google/domain/',
+						'app': 'https://rdap.nic.google/domain/',
+						'page': 'https://rdap.nic.google/domain/',
+						'new': 'https://rdap.nic.google/domain/',
+						'eu': 'https://rdap.eu/domain/',
+						'nl': 'https://rdap.sidn.nl/domain/',
+						'be': 'https://rdap.dns.be/domain/',
+						'ch': 'https://rdap.nic.ch/domain/',
+						'li': 'https://rdap.nic.ch/domain/',
+						'at': 'https://rdap.nic.at/domain/',
+						'info': 'https://rdap.afilias.net/rdap/info/domain/',
+						'me': 'https://rdap.nic.me/domain/',
+						'cc': 'https://rdap.verisign.com/cc/v1/domain/',
+						'tv': 'https://rdap.verisign.com/tv/v1/domain/',
+						'name': 'https://rdap.verisign.com/name/v1/domain/',
+						'xyz': 'https://rdap.nic.xyz/domain/',
+						'online': 'https://rdap.nic.online/domain/',
+						'site': 'https://rdap.nic.site/domain/',
+						'tech': 'https://rdap.nic.tech/domain/',
+						'store': 'https://rdap.nic.store/domain/',
+						'cloud': 'https://rdap.nic.cloud/domain/',
+						'top': 'https://rdap.nic.top/domain/',
+						'ru': 'https://rdap.tcinet.ru/domain/',
+						'su': 'https://rdap.tcinet.ru/domain/',
+						'br': 'https://rdap.registro.br/domain/',
+						'au': 'https://rdap.auda.org.au/domain/',
+						'ca': 'https://rdap.ca.fury.ca/rdap/domain/',
+						'jp': 'https://rdap.jprs.jp/domain/',
+						'cn': 'https://rdap.cnnic.cn/rdap/domain/',
+						'in': 'https://rdap.registry.in/domain/',
+						'pl': 'https://rdap.dns.pl/domain/',
+						'se': 'https://rdap.iis.se/domain/',
+						'no': 'https://rdap.norid.no/domain/',
+						'fi': 'https://rdap.fi/domain/',
+						'dk': 'https://rdap.dk-hostmaster.dk/domain/',
+						'cz': 'https://rdap.nic.cz/domain/',
+						'it': 'https://rdap.nic.it/domain/',
+						'es': 'https://rdap.nic.es/domain/',
+						'pt': 'https://rdap.dns.pt/domain/',
+						'nu': 'https://rdap.iis.se/domain/',
+						'nz': 'https://rdap.nzrs.net.nz/domain/',
+						'co': 'https://rdap.nic.co/domain/',
+					};
+
+					let rdapResp: Response | null = null;
+
+					// 1) Try direct RDAP server for this TLD
+					const directUrl = rdapServers[tld];
+					if (directUrl) {
+						try {
+							rdapResp = await fetchWithTimeout(`${directUrl}${encodeURIComponent(reconRootDomain)}`, {
+								headers: { 'Accept': 'application/rdap+json, application/json' },
+							}, 8000);
+							if (!rdapResp.ok) rdapResp = null;
+						} catch { rdapResp = null; }
+					}
+
+					// 2) Fallback: IANA RDAP bootstrap for unknown TLDs
+					if (!rdapResp) {
+						try {
+							const bootstrapResp = await fetchWithTimeout('https://data.iana.org/rdap/dns.json', {}, 5000);
+							if (bootstrapResp.ok) {
+								const bootstrap: any = await bootstrapResp.json();
+								for (const entry of (bootstrap.services || [])) {
+									const tlds: string[] = entry[0] || [];
+									const urls: string[] = entry[1] || [];
+									if (tlds.includes(tld) && urls.length > 0) {
+										const baseUrl = urls[0].endsWith('/') ? urls[0] : urls[0] + '/';
+										rdapResp = await fetchWithTimeout(`${baseUrl}domain/${encodeURIComponent(reconRootDomain)}`, {
+											headers: { 'Accept': 'application/rdap+json, application/json' },
+										}, 8000);
+										if (!rdapResp.ok) rdapResp = null;
+										break;
+									}
+								}
+							}
+						} catch { /* ignore bootstrap failure */ }
+					}
+
+					if (!rdapResp || !rdapResp.ok) return null;
 					const rdap: any = await rdapResp.json();
 
 					const cleanUri = (val: string | null): string | null => {

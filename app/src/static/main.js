@@ -5651,6 +5651,8 @@ function displayFullReconResults(data) {
 	</div>`;
 
 	// === Section 2: Domain WHOIS (RDAP) ===
+	console.log('[WAF-Checker] domainWhois data:', data.domainWhois);
+	try {
 	if (data.domainWhois) {
 		const dw = data.domainWhois;
 		const crDate = dw.creationDate ? new Date(dw.creationDate) : null;
@@ -5749,6 +5751,24 @@ function displayFullReconResults(data) {
 			</div>`;
 		}
 		html += `</div>`;
+	} else {
+		// RDAP data unavailable — show fallback
+		html += `<div class="bg-cyber-card border border-indigo-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-indigo-500/20 bg-indigo-500/5 flex items-center">
+				<h4 class="text-xs font-bold text-indigo-400 uppercase tracking-wider">Domain WHOIS</h4>
+				${reconTip('Domain registration data via RDAP: registrar, owner, contacts, dates, status, and DNSSEC.')}
+			</div>
+			<div class="p-4 text-center text-gray-500 text-xs">RDAP data unavailable for this domain (timeout or unsupported TLD)</div>
+		</div>`;
+	}
+	} catch(whoisErr) {
+		console.error('[WAF-Checker] Domain WHOIS rendering error:', whoisErr);
+		html += `<div class="bg-cyber-card border border-indigo-500/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-2.5 border-b border-indigo-500/20 bg-indigo-500/5 flex items-center">
+				<h4 class="text-xs font-bold text-indigo-400 uppercase tracking-wider">Domain WHOIS</h4>
+			</div>
+			<div class="p-4 text-center text-gray-500 text-xs">Error rendering WHOIS data</div>
+		</div>`;
 	}
 
 	// === Section 3: SSL / TLS Security ===
