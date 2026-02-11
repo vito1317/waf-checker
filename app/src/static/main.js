@@ -2765,7 +2765,7 @@ function exportAsJSON(session, includeAnalysis) {
 
 	if (includeAnalysis) {
 		const vulnerabilityScores = generateVulnerabilityScores(session.results, session.settings.falsePositiveTest);
-		const executiveSummary = generateExecutiveSummary(session.results, vulnerabilityScores, session.wafDetection);
+		const executiveSummary = generateExecutiveSummary(session.results, vulnerabilityScores, session.wafDetection, session.settings.falsePositiveTest);
 
 		exportData.analysis = {
 			vulnerabilityScores,
@@ -2831,16 +2831,24 @@ function exportAsCSV(results) {
 		'',
 		'"--- Results Summary ---"',
 		`"Risk Level","${(() => {
-			const bypassed = results.filter((r) => r.status === 200 || r.status === '200' || r.status === 500 || r.status === '500').length;
+			const isFP = currentTestSession?.settings?.falsePositiveTest;
+			const bypassed = results.filter((r) => isFP ? (r.status === 403 || r.status === '403') : (r.status === 200 || r.status === '200' || r.status === 500 || r.status === '500')).length;
 			const rate = results.length > 0 ? (bypassed / results.length) * 100 : 0;
 			if (rate > 75) return 'Critical';
 			if (rate > 50) return 'High';
 			if (rate > 25) return 'Medium';
 			return 'Low';
 		})()} "`,
-		`"WAF Effectiveness (%)",${results.length > 0 ? Math.round((100 - (results.filter((r) => r.status === 200 || r.status === '200' || r.status === 500 || r.status === '500').length / results.length) * 100) * 100) / 100 : 100}`,
+		`"${currentTestSession?.settings?.falsePositiveTest ? 'WAF Accuracy' : 'WAF Effectiveness'} (%)",${(() => {
+			const isFP = currentTestSession?.settings?.falsePositiveTest;
+			const bypassed = results.filter((r) => isFP ? (r.status === 403 || r.status === '403') : (r.status === 200 || r.status === '200' || r.status === 500 || r.status === '500')).length;
+			return results.length > 0 ? Math.round((100 - (bypassed / results.length) * 100) * 100) / 100 : 100;
+		})()}`,
 		`"Total Tests",${results.length}`,
-		`"Bypassed",${results.filter((r) => r.status === 200 || r.status === '200' || r.status === 500 || r.status === '500').length}`,
+		`"${currentTestSession?.settings?.falsePositiveTest ? 'False Positives' : 'Bypassed'}",${(() => {
+			const isFP = currentTestSession?.settings?.falsePositiveTest;
+			return results.filter((r) => isFP ? (r.status === 403 || r.status === '403') : (r.status === 200 || r.status === '200' || r.status === 500 || r.status === '500')).length;
+		})()}`,
 		'',
 		'"--- Response Time Summary ---"',
 		`"Avg Response Time (ms)",${avgTime}`,
@@ -2856,16 +2864,16 @@ function exportAsCSV(results) {
 
 function exportAsHTMLReport(session) {
 	const vulnerabilityScores = generateVulnerabilityScores(session.results, session.settings.falsePositiveTest);
-	const executiveSummary = generateExecutiveSummary(session.results, vulnerabilityScores, session.wafDetection);
+	const executiveSummary = generateExecutiveSummary(session.results, vulnerabilityScores, session.wafDetection, session.settings.falsePositiveTest);
 
-	const html = generateHTMLReport(session, vulnerabilityScores, executiveSummary);
+	const html = generateHTMLReport(session, vulnerabilityScores, executiveSummary, session.settings.falsePositiveTest);
 	const filename = generateFilename(session.url, 'html');
 	downloadFile(html, filename, 'text/html');
 
 	showAlert("HTML report downloaded. Use your browser's Print to PDF feature to create a PDF.", 'Success', 'success');
 }
 
-function generateHTMLReport(session, vulnerabilityScores, executiveSummary) {
+function generateHTMLReport(session, vulnerabilityScores, executiveSummary, falsePositiveMode = false) {
 	const getRiskColor = (risk) => {
 		switch (risk) {
 			case 'Critical':
@@ -3182,7 +3190,7 @@ function generateHTMLReport(session, vulnerabilityScores, executiveSummary) {
                 </div>
                 <div class="metric-card">
                     <div class="metric-value" style="color: ${executiveSummary.wafEffectiveness < 75 ? '#ffb347' : '#00ff9d'}">${executiveSummary.wafEffectiveness}%</div>
-                    <div class="metric-label">WAF Effectiveness</div>
+                    <div class="metric-label">${falsePositiveMode ? 'WAF Accuracy' : 'WAF Effectiveness'}</div>
                 </div>
                 <div class="metric-card">
                     <div class="metric-value">${executiveSummary.totalTests}</div>
@@ -3190,7 +3198,7 @@ function generateHTMLReport(session, vulnerabilityScores, executiveSummary) {
                 </div>
                 <div class="metric-card">
                     <div class="metric-value" style="color: ${executiveSummary.bypassedTests > 0 ? '#ff3860' : '#00ff9d'}">${executiveSummary.bypassedTests}</div>
-                    <div class="metric-label">Bypassed</div>
+                    <div class="metric-label">${falsePositiveMode ? 'False Positives' : 'Bypassed'}</div>
                 </div>
             </div>
             ${(() => {
@@ -3258,8 +3266,8 @@ function generateHTMLReport(session, vulnerabilityScores, executiveSummary) {
                             <th>Category</th>
                             <th>Severity</th>
                             <th>Score</th>
-                            <th>Bypass Rate</th>
-                            <th>Tests (Bypassed/Total)</th>
+                            <th>${falsePositiveMode ? 'FP Rate' : 'Bypass Rate'}</th>
+                            <th>Tests (${falsePositiveMode ? 'False Pos.' : 'Bypassed'}/Total)</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -3394,9 +3402,14 @@ function generateVulnerabilityScores(results, falsePositiveMode = false) {
 	return scores.sort((a, b) => b.score - a.score);
 }
 
-function generateExecutiveSummary(results, vulnerabilityScores, wafDetection) {
+function generateExecutiveSummary(results, vulnerabilityScores, wafDetection, falsePositiveMode = false) {
 	const totalTests = results.length;
-	const bypassedTests = results.filter((r) => r.status === 200 || r.status === '200' || r.status === 500 || r.status === '500').length;
+	const bypassedTests = results.filter((r) => {
+		if (falsePositiveMode) {
+			return r.status === 403 || r.status === '403';
+		}
+		return r.status === 200 || r.status === '200' || r.status === 500 || r.status === '500';
+	}).length;
 	const bypassRate = totalTests > 0 ? (bypassedTests / totalTests) * 100 : 0;
 	const wafEffectiveness = Math.max(0, 100 - bypassRate);
 
@@ -3421,24 +3434,39 @@ function generateExecutiveSummary(results, vulnerabilityScores, wafDetection) {
 	}
 
 	const recommendations = [];
-	if (criticalVulnerabilities > 0) {
-		recommendations.push('Immediately review and update WAF rules for critical vulnerabilities');
-	}
-	if (bypassRate > 50) {
-		recommendations.push('WAF configuration needs significant improvement');
-	}
-	if (!wafDetection?.detected) {
-		recommendations.push('Consider implementing a Web Application Firewall');
-	}
-
-	vulnerabilityScores.slice(0, 3).forEach((vuln) => {
-		if (vuln.severity === 'Critical' || vuln.severity === 'High') {
-			recommendations.push(`Strengthen protection against ${vuln.category} attacks`);
+	if (falsePositiveMode) {
+		if (bypassRate > 50) {
+			recommendations.push('WAF is blocking too much legitimate traffic - review and relax rules');
 		}
-	});
-
-	if (recommendations.length === 0) {
-		recommendations.push('WAF is performing well, continue monitoring');
+		if (criticalVulnerabilities > 0) {
+			recommendations.push('Critical false positive rate detected - immediate rule review needed');
+		}
+		vulnerabilityScores.slice(0, 3).forEach((vuln) => {
+			if (vuln.severity === 'Critical' || vuln.severity === 'High') {
+				recommendations.push(`Review WAF rules for ${vuln.category} - high false positive rate`);
+			}
+		});
+		if (recommendations.length === 0) {
+			recommendations.push('WAF has a low false positive rate - legitimate traffic flows normally');
+		}
+	} else {
+		if (criticalVulnerabilities > 0) {
+			recommendations.push('Immediately review and update WAF rules for critical vulnerabilities');
+		}
+		if (bypassRate > 50) {
+			recommendations.push('WAF configuration needs significant improvement');
+		}
+		if (!wafDetection?.detected) {
+			recommendations.push('Consider implementing a Web Application Firewall');
+		}
+		vulnerabilityScores.slice(0, 3).forEach((vuln) => {
+			if (vuln.severity === 'Critical' || vuln.severity === 'High') {
+				recommendations.push(`Strengthen protection against ${vuln.category} attacks`);
+			}
+		});
+		if (recommendations.length === 0) {
+			recommendations.push('WAF is performing well, continue monitoring');
+		}
 	}
 
 	// Response time stats
@@ -3485,14 +3513,14 @@ function showAnalytics() {
 	}
 
 	const vulnerabilityScores = generateVulnerabilityScores(currentTestSession.results, currentTestSession.settings.falsePositiveTest);
-	const executiveSummary = generateExecutiveSummary(currentTestSession.results, vulnerabilityScores, currentTestSession.wafDetection);
+	const executiveSummary = generateExecutiveSummary(currentTestSession.results, vulnerabilityScores, currentTestSession.wafDetection, currentTestSession.settings.falsePositiveTest);
 
 	const modal = document.getElementById('analyticsModal');
 	const content = document.getElementById('analyticsContent');
 
 	if (!modal || !content) return;
 
-	content.innerHTML = generateAnalyticsHTML(currentTestSession, vulnerabilityScores, executiveSummary);
+	content.innerHTML = generateAnalyticsHTML(currentTestSession, vulnerabilityScores, executiveSummary, currentTestSession.settings.falsePositiveTest);
 	modal.style.display = 'flex';
 	document.body.style.overflow = 'hidden';
 }
@@ -3690,7 +3718,7 @@ async function exportAnalyticsScreenshot(event) {
 	}
 }
 
-function generateAnalyticsHTML(session, vulnerabilityScores, summary) {
+function generateAnalyticsHTML(session, vulnerabilityScores, summary, falsePositiveMode = false) {
 	// Format date and time
 	const startDate = new Date(session.startTime);
 	const endDate = new Date(session.endTime);
@@ -3746,7 +3774,7 @@ function generateAnalyticsHTML(session, vulnerabilityScores, summary) {
 			</div>
 			<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl p-4 text-center">
 				<div class="text-2xl font-bold ${summary.wafEffectiveness < 75 ? 'text-cyber-warning' : 'text-cyber-success'} mb-1">${summary.wafEffectiveness}%</div>
-				<div class="text-xs text-gray-400 uppercase tracking-wider">WAF Effectiveness</div>
+				<div class="text-xs text-gray-400 uppercase tracking-wider">${falsePositiveMode ? 'WAF Accuracy' : 'WAF Effectiveness'}</div>
 			</div>
 			<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl p-4 text-center">
 				<div class="text-2xl font-bold text-white mb-1">${summary.totalTests}</div>
@@ -3754,7 +3782,7 @@ function generateAnalyticsHTML(session, vulnerabilityScores, summary) {
 			</div>
 			<div class="bg-cyber-card border ${summary.bypassedTests > 0 ? 'border-cyber-danger/30' : 'border-cyber-success/30'} rounded-xl p-4 text-center">
 				<div class="text-2xl font-bold ${summary.bypassedTests > 0 ? 'text-cyber-danger' : 'text-cyber-success'} mb-1">${summary.bypassedTests}</div>
-				<div class="text-xs text-gray-400 uppercase tracking-wider">Bypassed</div>
+				<div class="text-xs text-gray-400 uppercase tracking-wider">${falsePositiveMode ? 'False Positives' : 'Bypassed'}</div>
 			</div>
 		</div>
 
@@ -5984,8 +6012,10 @@ function saveScanToHistory(session) {
 
 	const history = getScanHistory();
 	const totalTests = session.results.length;
+	const isFP = session.settings?.falsePositiveTest;
 	const bypassed = session.results.filter((r) => {
 		const s = parseInt(String(r.status), 10);
+		if (isFP) return s === 403;
 		return s === 200 || s === 500;
 	}).length;
 	const bypassRate = totalTests > 0 ? Math.round((bypassed / totalTests) * 100) : 0;
@@ -6015,6 +6045,7 @@ function saveScanToHistory(session) {
 		avgResponseTime: avgTime,
 		minResponseTime: minTime,
 		maxResponseTime: maxTime,
+		falsePositiveTest: isFP || false,
 		categories: [...new Set(session.results.map((r) => r.category))],
 		methods: [...new Set(session.results.map((r) => r.method))],
 	};
@@ -6102,7 +6133,7 @@ function showScanHistory() {
 					</div>
 					<div class="text-center">
 						<div class="text-sm font-bold ${scan.bypassed > 0 ? 'text-cyber-danger' : 'text-cyber-success'} font-mono">${scan.bypassed}</div>
-						<div class="text-[9px] text-gray-500 uppercase">Bypassed</div>
+						<div class="text-[9px] text-gray-500 uppercase">${scan.falsePositiveTest ? 'False Pos.' : 'Bypassed'}</div>
 					</div>
 					<div class="text-center">
 						<div class="text-sm font-bold text-cyan-400 font-mono">${scan.avgResponseTime}ms</div>
