@@ -37,6 +37,19 @@ interface PassiveResult {
 }
 
 export class WAFDetector {
+  /**
+   * Safe fetch wrapper that catches ALL errors (including Workers runtime internal errors)
+   * and returns null instead of throwing. This prevents Uncaught Error: internal error.
+   */
+  private static async safeFetch(input: string | URL | Request, init?: RequestInit): Promise<Response | null> {
+    try {
+      return await fetch(input, init);
+    } catch (e) {
+      console.warn('safeFetch failed:', (e as Error)?.message || e);
+      return null;
+    }
+  }
+
   private static readonly WAF_SIGNATURES: WAFSignature[] = [
     // Cloudflare
     {
@@ -263,7 +276,7 @@ export class WAFDetector {
    */
   static async passiveDetection(url: string): Promise<PassiveResult> {
     try {
-      const response = await fetch(url, {
+      const response = await this.safeFetch(url, {
         method: 'GET',
         redirect: 'manual',
         headers: {
@@ -271,6 +284,17 @@ export class WAFDetector {
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         },
       });
+
+      if (!response) {
+        return {
+          detected: false,
+          name: 'Unknown',
+          confidence: 0,
+          evidence: [],
+          baselineStatus: 0,
+          baselineHeaders: new Map(),
+        };
+      }
 
       const baselineHeaders = new Map<string, string>();
       response.headers.forEach((value, key) => {
@@ -365,10 +389,11 @@ export class WAFDetector {
     for (const payload of probePayloads) {
       try {
         const startTime = Date.now();
-        const response = await fetch(`${url}?test=${encodeURIComponent(payload)}`, {
+        const response = await this.safeFetch(`${url}?test=${encodeURIComponent(payload)}`, {
           method: 'GET',
           redirect: 'manual',
         });
+        if (!response) continue;
         const responseTime = Date.now() - startTime;
         const responseBody = await response.text();
 
@@ -428,13 +453,17 @@ export class WAFDetector {
 
     for (const probe of evasionProbes) {
       try {
-        const response = await fetch(`${url}?q=${encodeURIComponent(probe)}`, {
+        const response = await this.safeFetch(`${url}?q=${encodeURIComponent(probe)}`, {
           method: 'GET',
           redirect: 'manual',
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           },
         });
+        if (!response) {
+          blockedCount++;
+          continue;
+        }
         if (response.status >= 400 && baselineStatus < 400) {
           blockedCount++;
         }
@@ -798,37 +827,37 @@ export class WAFDetector {
 
     try {
       // Test HTTP method bypass
-      const methodResponse = await fetch(url, { method: 'TRACE', redirect: 'manual' });
-      if (methodResponse.status !== 405) {
+      const methodResponse = await this.safeFetch(url, { method: 'TRACE', redirect: 'manual' });
+      if (methodResponse && methodResponse.status !== 405) {
         opportunities.httpMethodsBypass = true;
       }
 
       // Test header bypass with X-Original-URL
-      const headerResponse = await fetch(url, {
+      const headerResponse = await this.safeFetch(url, {
         method: 'GET',
         headers: { 'X-Original-URL': '/admin' },
         redirect: 'manual',
       });
-      if (headerResponse.status === 200) {
+      if (headerResponse && headerResponse.status === 200) {
         opportunities.headerBypass = true;
       }
 
       // Test encoding bypass
       const encodedPayload = '%2527%2520OR%25201%253D1';
-      const encodingResponse = await fetch(`${url}?test=${encodedPayload}`, {
+      const encodingResponse = await this.safeFetch(`${url}?test=${encodedPayload}`, {
         method: 'GET',
         redirect: 'manual',
       });
-      if (encodingResponse.status === 200) {
+      if (encodingResponse && encodingResponse.status === 200) {
         opportunities.encodingBypass = true;
       }
 
       // Test parameter pollution
-      const pollutionResponse = await fetch(`${url}?test=safe&test=malicious`, {
+      const pollutionResponse = await this.safeFetch(`${url}?test=safe&test=malicious`, {
         method: 'GET',
         redirect: 'manual',
       });
-      if (pollutionResponse.status === 200) {
+      if (pollutionResponse && pollutionResponse.status === 200) {
         opportunities.parameterPollution = true;
       }
     } catch (error) {

@@ -202,6 +202,7 @@ let INDEX_HTML = '';
 
 export default {
 	async fetch(request: Request, env: any): Promise<Response> {
+	  try {
 		const urlObj = new URL(request.url);
 
 		// Load payloads from GitHub on first request (non-blocking for static assets)
@@ -211,7 +212,7 @@ export default {
 			// Fire and forget for non-API requests
 			loadPayloadsFromGitHub();
 		}
-		
+
 		// Load index.html from assets if not already loaded
 		if (urlObj.pathname === '/' && !INDEX_HTML && env?.ASSETS) {
 			try {
@@ -223,7 +224,7 @@ export default {
 				console.error('Error loading index.html from assets:', e);
 			}
 		}
-		
+
 		if (urlObj.pathname === '/') {
 			// If INDEX_HTML is still empty, try to load from assets on each request
 			if (!INDEX_HTML && env?.ASSETS) {
@@ -535,6 +536,19 @@ export default {
 		}
 
 		return new Response('Not found', { status: 404 });
+	  } catch (err: any) {
+		console.error('Unhandled error in fetch handler:', err);
+		return new Response(
+			JSON.stringify({ error: 'Internal server error', message: err?.message || 'Unknown error' }),
+			{
+				status: 500,
+				headers: {
+					'content-type': 'application/json; charset=UTF-8',
+					'access-control-allow-origin': '*',
+				},
+			}
+		);
+	  }
 	},
 };
 
@@ -651,8 +665,9 @@ function getAPIDocumentation(origin: string) {
 // New streaming endpoint with parallelized requests
 async function handleApiCheckStream(request: Request): Promise<Response> {
 	const urlObj = new URL(request.url);
-	let url = urlObj.searchParams.get('url');
-	if (!url) return new Response('Missing url param', { status: 400 });
+	const urlParam = urlObj.searchParams.get('url');
+	if (!urlParam) return new Response('Missing url param', { status: 400 });
+	let url: string = urlParam;
 	if (url.includes('secmy')) {
 		return new Response('data: {"type":"complete","results":[]}\n\n', {
 			headers: {
@@ -678,7 +693,7 @@ async function handleApiCheckStream(request: Request): Promise<Response> {
 
 	let payloadTemplate: string | undefined = undefined;
 	let customHeaders: string | undefined = undefined;
-	let customPayloads: Record<string, { type: string; payloads: string[]; falsePayloads: string[] }> | undefined = undefined;
+	let customPayloads: Record<string, { type: string; payloads: string[]; falsePayloads: string[]; _deleted?: boolean }> | undefined = undefined;
 	if (request.method === 'POST') {
 		try {
 			const body: any = await request.json();
@@ -710,7 +725,7 @@ async function handleApiCheckStream(request: Request): Promise<Response> {
 	const stream = new ReadableStream({
 		async start(controller) {
 			const encoder = new TextEncoder();
-			
+
 			const sendEvent = (type: string, data: any) => {
 				const message = `data: ${JSON.stringify({ type, ...data })}\n\n`;
 				controller.enqueue(encoder.encode(message));
@@ -745,7 +760,7 @@ async function handleApiCheckStream(request: Request): Promise<Response> {
 							};
 						} else {
 							payloadSource[category] = {
-								type: data.type || 'ParamCheck',
+								type: (data.type as PayloadCategory['type']) || 'ParamCheck',
 								payloads: data.payloads || [],
 								falsePayloads: data.falsePayloads || [],
 							};
@@ -806,7 +821,7 @@ async function handleApiCheckStream(request: Request): Promise<Response> {
 				for (const [category, info] of payloadEntries) {
 					const checkType = info.type || 'ParamCheck';
 					const payloads = falsePositiveTest ? info.falsePayloads || [] : info.payloads || [];
-					
+
 					if (checkType === 'ParamCheck') {
 						for (let payload of payloads) {
 							if (caseSensitiveTest) {
@@ -875,18 +890,18 @@ async function handleApiCheckStream(request: Request): Promise<Response> {
 				sendEvent('total', { count: testRequests.length });
 
 				// Process requests in parallel batches
-				const PARALLEL_BATCH_SIZE = 20; // Number of concurrent requests
+				const PARALLEL_BATCH_SIZE = 5; // Reduced from 20 to avoid overwhelming Miniflare subrequest limits
 				let completedCount = 0;
 
 				for (let i = 0; i < testRequests.length; i += PARALLEL_BATCH_SIZE) {
 					const batch = testRequests.slice(i, i + PARALLEL_BATCH_SIZE);
-					
+
 					// Execute batch in parallel
 					const batchPromises = batch.map(async (req) => {
 						try {
 							let finalUrl = url;
 							let finalMethod = req.method;
-							let finalPayload = req.payload;
+							let finalPayload: string | undefined = req.payload;
 
 							if (req.checkType === 'FileCheck') {
 								finalUrl = req.payload;
@@ -972,7 +987,7 @@ async function handleApiCheckFiltered(
 	useEncodingVariations: boolean = false,
 	detectedWAF?: string,
 	httpManipulation?: HTTPManipulationOptions,
-	customPayloads?: Record<string, { type: string; payloads: string[]; falsePayloads: string[] }>,
+	customPayloads?: Record<string, { type: string; payloads: string[]; falsePayloads: string[]; _deleted?: boolean }>,
 ): Promise<any[]> {
 	const METHODS = methods && methods.length ? methods : ['GET'];
 	const results: any[] = [];
@@ -1043,11 +1058,11 @@ async function handleApiCheckFiltered(
 				const existingFalsePayloads = payloadSource[category].falsePayloads || [];
 				const customPayloadsList = data.payloads || [];
 				const customFalsePayloadsList = data.falsePayloads || [];
-				
+
 				// Create unique sets to avoid duplicates
 				const mergedPayloads = [...new Set([...existingPayloads, ...customPayloadsList])];
 				const mergedFalsePayloads = [...new Set([...existingFalsePayloads, ...customFalsePayloadsList])];
-				
+
 				payloadSource[category] = {
 					...payloadSource[category],
 					payloads: mergedPayloads,
@@ -1056,7 +1071,7 @@ async function handleApiCheckFiltered(
 			} else {
 				// New custom category
 				payloadSource[category] = {
-					type: data.type || 'ParamCheck',
+					type: (data.type as PayloadCategory['type']) || 'ParamCheck',
 					payloads: data.payloads || [],
 					falsePayloads: data.falsePayloads || [],
 				};
@@ -1296,11 +1311,11 @@ function handleGetPayloads(urlObj: URL): Response {
 
 	// Combine all payload sources
 	let allPayloads: Record<string, PayloadCategory> = { ...PAYLOADS };
-	
+
 	if (includeEnhanced) {
 		allPayloads = { ...allPayloads, ...ENHANCED_PAYLOADS };
 	}
-	
+
 	if (includeAdvanced) {
 		allPayloads = { ...allPayloads, ...ADVANCED_PAYLOADS };
 	}
@@ -1327,7 +1342,7 @@ function handleGetPayloads(urlObj: URL): Response {
 
 	// Return all categories with their payloads
 	const result: Record<string, { type: string; payloads: string[]; falsePayloads: string[] }> = {};
-	
+
 	for (const [cat, data] of Object.entries(allPayloads)) {
 		result[cat] = {
 			type: data.type,
@@ -1354,8 +1369,14 @@ async function handleWAFDetection(request: Request): Promise<Response> {
 	}
 
 	try {
-		const detection = await WAFDetector.activeDetection(targetUrl);
-		const bypassOpportunities = await WAFDetector.detectBypassOpportunities(targetUrl);
+		// Run both detections in parallel with allSettled to prevent one failure from crashing the other
+		const [detectionResult, bypassResult] = await Promise.allSettled([
+			WAFDetector.activeDetection(targetUrl),
+			WAFDetector.detectBypassOpportunities(targetUrl),
+		]);
+
+		const detection = detectionResult.status === 'fulfilled' ? detectionResult.value : null;
+		const bypassOpportunities = bypassResult.status === 'fulfilled' ? bypassResult.value : null;
 
 		return new Response(
 			JSON.stringify({
@@ -1470,7 +1491,7 @@ async function handleBatchStart(request: Request): Promise<Response> {
 	cleanupOldBatchJobs();
 
 	try {
-		const body = await request.json();
+		const body = await request.json() as any;
 		const { urls, config } = body;
 
 		// Remove delay from config as it's handled client-side
