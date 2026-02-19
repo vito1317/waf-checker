@@ -2855,6 +2855,18 @@ function exportAsCSV(results) {
 		`"Min Response Time (ms)",${minTime}`,
 		`"Max Response Time (ms)",${maxTime}`,
 		`"Slow Requests (>${SLOW_RESPONSE_THRESHOLD}ms)",${slowCount}`,
+		'',
+		'"--- Test Configuration ---"',
+		`"HTTP Methods","${(currentTestSession?.settings?.methods || []).join(', ')}"`,
+		`"Tested Categories","${(currentTestSession?.settings?.categories || []).join(', ')}"`,
+		`"Follow Redirects",${currentTestSession?.settings?.followRedirect ? 'Yes' : 'No'}`,
+		`"False Positive Test",${currentTestSession?.settings?.falsePositiveTest ? 'Yes' : 'No'}`,
+		`"Case Sensitive Test",${currentTestSession?.settings?.caseSensitiveTest ? 'Yes' : 'No'}`,
+		`"Enhanced Payloads",${currentTestSession?.settings?.enhancedPayloads ? 'Yes' : 'No'}`,
+		`"Advanced Payloads",${currentTestSession?.settings?.useAdvancedPayloads ? 'Yes' : 'No'}`,
+		`"Auto Detect WAF",${currentTestSession?.settings?.autoDetectWAF ? 'Yes' : 'No'}`,
+		`"Encoding Variations",${currentTestSession?.settings?.useEncodingVariations ? 'Yes' : 'No'}`,
+		`"HTTP Manipulation",${currentTestSession?.settings?.httpManipulation ? 'Yes' : 'No'}`,
 	];
 
 	const content = csvRows.join('\n');
@@ -3255,6 +3267,40 @@ function generateHTMLReport(session, vulnerabilityScores, executiveSummary, fals
         `
 						: ''
 				}
+
+        <div class="card">
+            <h2 class="card-title">⚙️ Test Configuration</h2>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
+                <div class="info-item">
+                    <div class="info-label">HTTP Methods</div>
+                    <div class="info-value">${(session.settings?.methods || []).join(', ') || 'N/A'}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Tested Categories</div>
+                    <div class="info-value" style="font-size: 12px; word-break: break-word;">${(session.settings?.categories || []).join(', ') || 'All'}</div>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 20px;">
+                ${[
+                    { label: 'Follow Redirects', key: 'followRedirect' },
+                    { label: 'False Positive Test', key: 'falsePositiveTest' },
+                    { label: 'Case Sensitive', key: 'caseSensitiveTest' },
+                    { label: 'Enhanced Payloads', key: 'enhancedPayloads' },
+                    { label: 'Advanced Payloads', key: 'useAdvancedPayloads' },
+                    { label: 'Auto Detect WAF', key: 'autoDetectWAF' },
+                    { label: 'Encoding Variations', key: 'useEncodingVariations' },
+                    { label: 'HTTP Manipulation', key: 'httpManipulation' },
+                ].map(opt => {
+                    const val = session.settings?.[opt.key];
+                    const isOn = !!val;
+                    return `<div style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: ${isOn ? 'rgba(0, 255, 157, 0.06)' : 'rgba(107, 114, 128, 0.06)'}; border: 1px solid ${isOn ? 'rgba(0, 255, 157, 0.2)' : 'rgba(107, 114, 128, 0.15)'}; border-radius: 8px;">
+                        <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: ${isOn ? '#00ff9d' : '#4b5563'};"></span>
+                        <span style="font-size: 13px; color: ${isOn ? '#e5e7eb' : '#6b7280'};">${opt.label}</span>
+                        <span style="margin-left: auto; font-size: 12px; font-weight: 700; color: ${isOn ? '#00ff9d' : '#6b7280'};">${isOn ? 'ON' : 'OFF'}</span>
+                    </div>`;
+                }).join('')}
+            </div>
+        </div>
 
         <div class="card">
             <h2 class="card-title">📋 Vulnerability Assessment</h2>
@@ -3864,6 +3910,44 @@ function generateAnalyticsHTML(session, vulnerabilityScores, summary, falsePosit
 							)
 							.join('')}
 					</ul>
+				</div>
+			</div>
+		</div>
+
+		<!-- Test Configuration -->
+		<div class="bg-cyber-card border border-cyber-accent/20 rounded-xl overflow-hidden mb-4">
+			<div class="px-4 py-3 border-b border-cyber-accent/20 bg-cyber-elevated/30">
+				<h4 class="text-sm font-bold text-white">⚙️ Test Configuration</h4>
+			</div>
+			<div class="p-4">
+				<div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+					<div class="bg-cyber-elevated/50 rounded-lg p-3">
+						<div class="text-[10px] text-gray-400 uppercase tracking-wider mb-1">HTTP Methods</div>
+						<div class="text-xs text-cyber-accent font-mono font-medium">${(session.settings?.methods || []).join(', ') || 'N/A'}</div>
+					</div>
+					<div class="bg-cyber-elevated/50 rounded-lg p-3">
+						<div class="text-[10px] text-gray-400 uppercase tracking-wider mb-1">Categories</div>
+						<div class="text-xs text-white font-medium" style="word-break: break-word;">${(session.settings?.categories || []).join(', ') || 'All'}</div>
+					</div>
+				</div>
+				<div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+					${[
+						{ label: 'Follow Redirects', key: 'followRedirect' },
+						{ label: 'False Positive', key: 'falsePositiveTest' },
+						{ label: 'Case Sensitive', key: 'caseSensitiveTest' },
+						{ label: 'Enhanced Payloads', key: 'enhancedPayloads' },
+						{ label: 'Advanced Payloads', key: 'useAdvancedPayloads' },
+						{ label: 'Auto Detect WAF', key: 'autoDetectWAF' },
+						{ label: 'Encoding Variations', key: 'useEncodingVariations' },
+						{ label: 'HTTP Manipulation', key: 'httpManipulation' },
+					].map(opt => {
+						const isOn = !!session.settings?.[opt.key];
+						return `<div class="flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${isOn ? 'bg-cyber-success/10 border border-cyber-success/20' : 'bg-gray-500/10 border border-gray-500/15'}">
+							<span class="w-2 h-2 rounded-full ${isOn ? 'bg-cyber-success' : 'bg-gray-500'}"></span>
+							<span class="${isOn ? 'text-gray-200' : 'text-gray-500'}">${opt.label}</span>
+							<span class="ml-auto font-bold ${isOn ? 'text-cyber-success' : 'text-gray-500'}">${isOn ? 'ON' : 'OFF'}</span>
+						</div>`;
+					}).join('')}
 				</div>
 			</div>
 		</div>

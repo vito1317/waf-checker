@@ -405,6 +405,30 @@ export function generateHTMLReport(session: TestSession): string {
     ` : ''}
 
     <div class="summary-card">
+        <h3>Test Configuration</h3>
+        <p><strong>HTTP Methods:</strong> ${session.settings.methods.join(', ')}</p>
+        <p><strong>Tested Categories:</strong> ${session.settings.categories.join(', ') || 'All'}</p>
+        <table class="vulnerability-table" style="margin-top: 10px;">
+            <thead>
+                <tr>
+                    <th>Setting</th>
+                    <th>Value</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td>Follow Redirects</td><td>${session.settings.followRedirect ? '✅ Yes' : '❌ No'}</td></tr>
+                <tr><td>False Positive Test</td><td>${session.settings.falsePositiveTest ? '✅ Yes' : '❌ No'}</td></tr>
+                <tr><td>Case Sensitive Test</td><td>${session.settings.caseSensitiveTest ? '✅ Yes' : '❌ No'}</td></tr>
+                <tr><td>Enhanced Payloads</td><td>${session.settings.enhancedPayloads ? '✅ Yes' : '❌ No'}</td></tr>
+                <tr><td>Advanced Payloads</td><td>${session.settings.useAdvancedPayloads ? '✅ Yes' : '❌ No'}</td></tr>
+                <tr><td>Auto Detect WAF</td><td>${session.settings.autoDetectWAF ? '✅ Yes' : '❌ No'}</td></tr>
+                <tr><td>Encoding Variations</td><td>${session.settings.useEncodingVariations ? '✅ Yes' : '❌ No'}</td></tr>
+                <tr><td>HTTP Manipulation</td><td>${session.settings.httpManipulation ? '✅ Yes' : '❌ No'}</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="summary-card">
         <h3>Vulnerability Assessment</h3>
         <table class="vulnerability-table">
             <thead>
