@@ -556,7 +556,7 @@ export class ReportExporter {
 
     // Note: For actual PDF generation, you would need a PDF library
     // This exports as HTML which can be printed to PDF by the browser
-    alert('HTML report downloaded. Use your browser\'s Print to PDF feature to create a PDF.');
+    console.log('HTML report downloaded. Use your browser\'s Print to PDF feature to create a PDF.');
   }
 
   getAnalysis() {
