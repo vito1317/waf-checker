@@ -3946,7 +3946,8 @@ async function handleSpeedTest(request: Request): Promise<Response> {
 		const html = new TextDecoder().decode(htmlBytes);
 		const htmlSize = htmlBytes.byteLength;
 
-		const headers = Object.fromEntries([...mainResp.headers.entries()]);
+		const headers: Record<string, string> = {};
+		mainResp.headers.forEach((value, key) => { headers[key] = value; });
 		const statusCode = mainResp.status;
 		const redirected = mainResp.redirected;
 		const finalUrl = mainResp.url;
