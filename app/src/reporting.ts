@@ -134,14 +134,11 @@ export function generateVulnerabilityScores(results: TestResult[], falsePositive
 /**
  * Generate executive summary
  */
-export function generateExecutiveSummary(results: TestResult[], vulnerabilityScores: VulnerabilityScore[], wafDetection?: WAFDetectionResult, falsePositiveMode: boolean = false): ExecutiveSummary {
+export function generateExecutiveSummary(results: TestResult[], vulnerabilityScores: VulnerabilityScore[], wafDetection?: WAFDetectionResult): ExecutiveSummary {
   const totalTests = results.length;
-  const bypassedTests = results.filter(r => {
-    if (falsePositiveMode) {
-      return r.status === 403 || r.status === '403';
-    }
-    return r.status === 200 || r.status === '200' || r.status === 500 || r.status === '500';
-  }).length;
+  const bypassedTests = results.filter(r =>
+    r.status === 200 || r.status === '200' || r.status === 500 || r.status === '500'
+  ).length;
   const bypassRate = totalTests > 0 ? (bypassedTests / totalTests) * 100 : 0;
   const wafEffectiveness = Math.max(0, 100 - bypassRate);
 
@@ -172,39 +169,26 @@ export function generateExecutiveSummary(results: TestResult[], vulnerabilitySco
   // Generate recommendations
   const recommendations: string[] = [];
 
-  if (falsePositiveMode) {
-    if (bypassRate > 50) {
-      recommendations.push('WAF is blocking too much legitimate traffic - review and relax rules');
+  if (criticalVulnerabilities > 0) {
+    recommendations.push('Immediately review and update WAF rules for critical vulnerabilities');
+  }
+
+  if (bypassRate > 50) {
+    recommendations.push('WAF configuration needs significant improvement');
+  }
+
+  if (!wafDetection?.detected) {
+    recommendations.push('Consider implementing a Web Application Firewall');
+  }
+
+  vulnerabilityScores.slice(0, 3).forEach(vuln => {
+    if (vuln.severity === 'Critical' || vuln.severity === 'High') {
+      recommendations.push(`Strengthen protection against ${vuln.category} attacks`);
     }
-    if (criticalVulnerabilities > 0) {
-      recommendations.push('Critical false positive rate detected - immediate rule review needed');
-    }
-    vulnerabilityScores.slice(0, 3).forEach(vuln => {
-      if (vuln.severity === 'Critical' || vuln.severity === 'High') {
-        recommendations.push(`Review WAF rules for ${vuln.category} - high false positive rate`);
-      }
-    });
-    if (recommendations.length === 0) {
-      recommendations.push('WAF has a low false positive rate - legitimate traffic flows normally');
-    }
-  } else {
-    if (criticalVulnerabilities > 0) {
-      recommendations.push('Immediately review and update WAF rules for critical vulnerabilities');
-    }
-    if (bypassRate > 50) {
-      recommendations.push('WAF configuration needs significant improvement');
-    }
-    if (!wafDetection?.detected) {
-      recommendations.push('Consider implementing a Web Application Firewall');
-    }
-    vulnerabilityScores.slice(0, 3).forEach(vuln => {
-      if (vuln.severity === 'Critical' || vuln.severity === 'High') {
-        recommendations.push(`Strengthen protection against ${vuln.category} attacks`);
-      }
-    });
-    if (recommendations.length === 0) {
-      recommendations.push('WAF is performing well, continue monitoring');
-    }
+  });
+
+  if (recommendations.length === 0) {
+    recommendations.push('WAF is performing well, continue monitoring');
   }
 
   return {
@@ -234,7 +218,7 @@ export function exportAsJSON(session: TestSession, includeAnalysis: boolean = tr
 
   if (includeAnalysis) {
     const vulnerabilityScores = generateVulnerabilityScores(session.results, session.settings.falsePositiveTest);
-    const executiveSummary = generateExecutiveSummary(session.results, vulnerabilityScores, session.wafDetection, session.settings.falsePositiveTest);
+    const executiveSummary = generateExecutiveSummary(session.results, vulnerabilityScores, session.wafDetection);
 
     exportData.analysis = {
       vulnerabilityScores,
@@ -291,9 +275,16 @@ export function exportAsCSV(results: TestResult[]): string {
  * Generate HTML report for PDF export
  */
 export function generateHTMLReport(session: TestSession): string {
-  const falsePositiveMode = session.settings.falsePositiveTest;
-  const vulnerabilityScores = generateVulnerabilityScores(session.results, falsePositiveMode);
-  const executiveSummary = generateExecutiveSummary(session.results, vulnerabilityScores, session.wafDetection, falsePositiveMode);
+  const vulnerabilityScores = generateVulnerabilityScores(session.results, session.settings.falsePositiveTest);
+  const executiveSummary = generateExecutiveSummary(session.results, vulnerabilityScores, session.wafDetection);
+
+  const statusColors = {
+    200: '#dc3545', // Red (bad in normal mode)
+    403: '#198754', // Green (good in normal mode)
+    404: '#ffc107', // Yellow
+    500: '#dc3545', // Red
+    default: '#6c757d' // Gray
+  };
 
   const getRiskColor = (risk: string) => {
     switch (risk) {
@@ -305,21 +296,12 @@ export function generateHTMLReport(session: TestSession): string {
     }
   };
 
-  // In FP mode: 200 = green (allowed), 403 = red (blocked)
-  // In normal mode: 403 = green (protected), 200 = red (vulnerable)
-  const statusGoodClass = falsePositiveMode ? 'status-200' : 'status-403';
-  const statusBadClass = falsePositiveMode ? 'status-403' : 'status-200';
-  const effectivenessLabel = falsePositiveMode ? 'WAF Accuracy' : 'WAF Effectiveness';
-  const bypassedLabel = falsePositiveMode ? 'False Positives' : 'Bypassed Tests';
-  const bypassRateLabel = falsePositiveMode ? 'FP Rate' : 'Bypass Rate';
-  const testCountLabel = falsePositiveMode ? 'False Pos.' : 'Bypassed';
-
   return `
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>WAF ${falsePositiveMode ? 'False Positive' : 'Security'} Assessment Report</title>
+    <title>WAF Security Assessment Report</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 40px; color: #333; }
         .header { text-align: center; margin-bottom: 40px; border-bottom: 2px solid #007bff; padding-bottom: 20px; }
@@ -339,28 +321,20 @@ export function generateHTMLReport(session: TestSession): string {
         .results-table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
         .results-table th, .results-table td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
         .results-table th { background-color: #f8f9fa; }
-        .status-good { background-color: #d1e7dd; }
-        .status-bad { background-color: #f8d7da; }
+        .status-200 { background-color: #f8d7da; }
+        .status-403 { background-color: #d1e7dd; }
         .status-other { background-color: #fff3cd; }
         .page-break { page-break-before: always; }
-        .fp-banner { background: #cfe2ff; padding: 12px 20px; border-left: 4px solid #0d6efd; margin-bottom: 20px; border-radius: 4px; }
         @media print { .page-break { page-break-before: always; } }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>WAF ${falsePositiveMode ? 'False Positive' : 'Security'} Assessment Report</h1>
+        <h1>WAF Security Assessment Report</h1>
         <p><strong>Target URL:</strong> ${session.url}</p>
         <p><strong>Test Date:</strong> ${new Date(session.startTime).toLocaleString()}</p>
         <p><strong>Duration:</strong> ${Math.round((new Date(session.endTime).getTime() - new Date(session.startTime).getTime()) / 1000)}s</p>
     </div>
-
-    ${falsePositiveMode ? `
-    <div class="fp-banner">
-        <strong>False Positive Test</strong> — This report tests if legitimate traffic is being blocked by the WAF.
-        <strong>200 = Allowed (good)</strong>, <strong>403 = Blocked (bad)</strong>.
-    </div>
-    ` : ''}
 
     <div class="summary-card">
         <h2>Executive Summary</h2>
@@ -377,11 +351,11 @@ export function generateHTMLReport(session: TestSession): string {
             </div>
             <div class="metric">
                 <div class="metric-value">${executiveSummary.wafEffectiveness}%</div>
-                <div class="metric-label">${effectivenessLabel}</div>
+                <div class="metric-label">WAF Effectiveness</div>
             </div>
             <div class="metric">
                 <div class="metric-value">${executiveSummary.bypassedTests}</div>
-                <div class="metric-label">${bypassedLabel}</div>
+                <div class="metric-label">Bypassed Tests</div>
             </div>
             <div class="metric">
                 <div class="metric-value">${executiveSummary.totalTests}</div>
@@ -405,30 +379,6 @@ export function generateHTMLReport(session: TestSession): string {
     ` : ''}
 
     <div class="summary-card">
-        <h3>Test Configuration</h3>
-        <p><strong>HTTP Methods:</strong> ${session.settings.methods.join(', ')}</p>
-        <p><strong>Tested Categories:</strong> ${session.settings.categories.join(', ') || 'All'}</p>
-        <table class="vulnerability-table" style="margin-top: 10px;">
-            <thead>
-                <tr>
-                    <th>Setting</th>
-                    <th>Value</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr><td>Follow Redirects</td><td>${session.settings.followRedirect ? '✅ Yes' : '❌ No'}</td></tr>
-                <tr><td>False Positive Test</td><td>${session.settings.falsePositiveTest ? '✅ Yes' : '❌ No'}</td></tr>
-                <tr><td>Case Sensitive Test</td><td>${session.settings.caseSensitiveTest ? '✅ Yes' : '❌ No'}</td></tr>
-                <tr><td>Enhanced Payloads</td><td>${session.settings.enhancedPayloads ? '✅ Yes' : '❌ No'}</td></tr>
-                <tr><td>Advanced Payloads</td><td>${session.settings.useAdvancedPayloads ? '✅ Yes' : '❌ No'}</td></tr>
-                <tr><td>Auto Detect WAF</td><td>${session.settings.autoDetectWAF ? '✅ Yes' : '❌ No'}</td></tr>
-                <tr><td>Encoding Variations</td><td>${session.settings.useEncodingVariations ? '✅ Yes' : '❌ No'}</td></tr>
-                <tr><td>HTTP Manipulation</td><td>${session.settings.httpManipulation ? '✅ Yes' : '❌ No'}</td></tr>
-            </tbody>
-        </table>
-    </div>
-
-    <div class="summary-card">
         <h3>Vulnerability Assessment</h3>
         <table class="vulnerability-table">
             <thead>
@@ -436,8 +386,8 @@ export function generateHTMLReport(session: TestSession): string {
                     <th>Category</th>
                     <th>Severity</th>
                     <th>Score</th>
-                    <th>${bypassRateLabel}</th>
-                    <th>Tests (${testCountLabel}/Total)</th>
+                    <th>Bypass Rate</th>
+                    <th>Tests (Bypassed/Total)</th>
                 </tr>
             </thead>
             <tbody>
@@ -476,15 +426,9 @@ export function generateHTMLReport(session: TestSession): string {
         </thead>
         <tbody>
             ${session.results.map(result => {
-                const codeNum = typeof result.status === 'number' ? result.status : parseInt(String(result.status), 10);
                 let statusClass = 'status-other';
-                if (falsePositiveMode) {
-                    if (codeNum >= 200 && codeNum < 300) statusClass = 'status-good';
-                    else if (codeNum === 403) statusClass = 'status-bad';
-                } else {
-                    if (codeNum === 403) statusClass = 'status-good';
-                    else if (codeNum >= 200 && codeNum < 300) statusClass = 'status-bad';
-                }
+                if (result.status === 200 || result.status === '200') statusClass = 'status-200';
+                if (result.status === 403 || result.status === '403') statusClass = 'status-403';
 
                 return `
                 <tr class="${statusClass}">
@@ -556,12 +500,12 @@ export class ReportExporter {
 
     // Note: For actual PDF generation, you would need a PDF library
     // This exports as HTML which can be printed to PDF by the browser
-    console.log('HTML report downloaded. Use your browser\'s Print to PDF feature to create a PDF.');
+    alert('HTML report downloaded. Use your browser\'s Print to PDF feature to create a PDF.');
   }
 
   getAnalysis() {
     const vulnerabilityScores = generateVulnerabilityScores(this.session.results, this.session.settings.falsePositiveTest);
-    const executiveSummary = generateExecutiveSummary(this.session.results, vulnerabilityScores, this.session.wafDetection, this.session.settings.falsePositiveTest);
+    const executiveSummary = generateExecutiveSummary(this.session.results, vulnerabilityScores, this.session.wafDetection);
 
     return {
       vulnerabilityScores,
